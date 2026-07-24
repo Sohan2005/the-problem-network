@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Table
 from sqlalchemy.orm import relationship, declarative_base
-from sqlalchemy.sql import func
+from datetime import datetime
 from pgvector.sqlalchemy import Vector
 
 Base = declarative_base()
@@ -20,7 +20,7 @@ class Problem(Base):
     source_url = Column(String(500), nullable=False, unique=True)
     raw_text = Column(Text, nullable=False)
     embedding = Column(Vector(768), nullable=True)
-    ingested_at = Column(DateTime, default=func.utcnow())
+    ingested_at = Column(DateTime, default=datetime.utcnow)
     
     brief = relationship("Brief", back_populates="problem", uselist=False)
 
@@ -33,7 +33,7 @@ class Brief(Base):
     difficulty = Column(String(20), nullable=False)
     core_task = Column(Text, nullable=False)
     recommended_stack = Column(String(300), nullable=True)
-    created_at = Column(DateTime, default=func.utcnow())
+    created_at = Column(DateTime, default=datetime.utcnow)
     
     problem = relationship("Problem", back_populates="brief")
     tags = relationship("Tag", secondary=brief_tags, back_populates="briefs")
@@ -52,4 +52,4 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     email = Column(String(255), nullable=False, unique=True)
     hashed_password = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=func.utcnow())
+    created_at = Column(DateTime, default=datetime.utcnow)
