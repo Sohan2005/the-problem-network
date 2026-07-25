@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Providers } from "./providers";
+import "../styles/tokens.css";
 
 export const metadata: Metadata = {
   title: "The Problem Network",
