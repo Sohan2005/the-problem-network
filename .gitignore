@@ -1,3 +1,77 @@
+# Secrets
 .env
-__pycache__/
+backend/.env
+frontend/.env.local
+functions/weekly_ingest/local.settings.json
+
+# Build artifacts
+frontend/.next/
+frontend/node_modules/
+frontend/.vscode/
+**/__pycache__/
 *.pyc
+
+# Data export / log artifacts
+backend/duplicates_resolved.log
+backend/step6_review_export.md
+backend/step6_review_export_latest.md
+step6_review_export_latest.md
+
+# Planning/process docs (deferred to end of project)
+00A_SCOPE_BLUEPRINT.md
+00A_SCOPE_BLUEPRINT_updated.md
+00_BUILD_ORDER (1).md
+00_BUILD_ORDER_updated.md
+09_AUTONOMOUS_EXECUTION.md
+10_FULL_SETUP_GUIDE (1).md
+10_FULL_SETUP_GUIDE.md
+11_COMMIT_TRIGGERS.md
+AI_UI_PATTERNS_TO_AVOID.md
+DECISION_CHANGE.md
+DESIGN-NETWORK2.md
+MAIN_GOAL (1).md
+PROGRESS.md
+The_Problem_Network (1).md
+decision-log.md
+docs/AI_UI_PATTERNS_TO_AVOID.md
+docs/DECISION_CHANGE.md
+
+# One-off utility / debug / test scripts (backend)
+backend/add_*.py
+backend/alter_*.py
+backend/analyze_*.py
+backend/apply_*.py
+backend/backfill_*.py
+backend/check_*.py
+backend/clear_*.py
+backend/count_*.py
+backend/create_raw_ideas_table.py
+backend/debug_*.py
+backend/dedup_check.py
+backend/delete_*.py
+backend/find_*.py
+backend/fix_*.py
+backend/identify_*.py
+backend/investigate_*.py
+backend/make_problem_id_nullable.py
+backend/populate_*.py
+backend/process_14_qualifying_ids.py
+backend/process_ids_138_139.py
+backend/query_*.py
+backend/re_reject_id_98.py
+backend/retest_*.py
+backend/sanity_check_all.py
+backend/select_test_records.py
+backend/show_*.py
+backend/spot_check_*.py
+backend/test_*.py
+backend/update_*.py
+backend/remove_task.ps1
+backend/setup_daily_publish_task.ps1
+backend/run_daily_publish.bat
+
+# One-time/manual utility scripts (EXCLUDE from Step 1)
+backend/confirm_briefs.py
+backend/export_approved_ideas.py
+backend/review_web_grounding.py
+backend/within_batch_dedup.py
