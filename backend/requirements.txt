@@ -5,4 +5,6 @@ psycopg2-binary
 pgvector
 python-dotenv
 google-generativeai
+google-genai
 requests
+beautifulsoup4
