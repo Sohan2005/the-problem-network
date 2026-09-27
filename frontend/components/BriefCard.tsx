@@ -1,13 +1,30 @@
+"use client";
+
 import Link from "next/link";
+import { useState, useEffect } from "react";
 import { Brief } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { getFavorites, toggleFavorite, isFavorite } from "@/lib/favorites";
 
 interface BriefCardProps {
   brief: Brief;
 }
 
 export default function BriefCard({ brief }: BriefCardProps) {
+  const [isSaved, setIsSaved] = useState(false);
+
+  useEffect(() => {
+    setIsSaved(isFavorite(brief.id));
+  }, [brief.id]);
+
+  const handleFavorite = (e: React.MouseEvent) => {
+    e.preventDefault();
+    toggleFavorite(brief.id);
+    setIsSaved(!isSaved);
+  };
+
   return (
     <Card variant="default" className="hover:shadow-hover transition-shadow">
       <Link href={`/briefs/${brief.id}`} className="block">
@@ -27,15 +44,25 @@ export default function BriefCard({ brief }: BriefCardProps) {
         </p>
 
         {/* Technology Badges */}
-        {brief.tags && brief.tags.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {brief.tags.map((tag) => (
-              <Badge key={tag} variant="default" className="text-xs">
-                {tag}
+        {brief.recommended_stack && brief.recommended_stack.length > 0 && (
+          <div className="flex flex-wrap gap-1 mb-3">
+            {brief.recommended_stack.map((tech, idx) => (
+              <Badge key={idx} variant="default" className="text-xs">
+                {tech}
               </Badge>
             ))}
           </div>
         )}
+
+        {/* Favorite Control */}
+        <Button
+          variant="ghost"
+          onClick={handleFavorite}
+          className="min-h-[48px] min-w-[48px] text-accent"
+        >
+          <span className="mr-2">{isSaved ? "♥" : "♡"}</span>
+          Favorite
+        </Button>
       </Link>
     </Card>
   );
