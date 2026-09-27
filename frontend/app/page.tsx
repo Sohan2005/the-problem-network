@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchBriefs } from "@/lib/api";
 import { useFilterStore } from "@/lib/store";
@@ -9,11 +10,25 @@ import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 
 export default function Home() {
-  const { difficulty, tag } = useFilterStore();
-  
+  const { difficulty, tag, searchQuery, sortBy, setSearchQuery, setSortBy } = useFilterStore();
+  const [localSearch, setLocalSearch] = useState("");
+
+  // Debounced search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSearchQuery(localSearch || null);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [localSearch, setSearchQuery]);
+
   const { data: briefs, isLoading, error } = useQuery({
-    queryKey: ["briefs", difficulty, tag],
-    queryFn: () => fetchBriefs({ difficulty: difficulty || undefined, tag: tag || undefined }),
+    queryKey: ["briefs", difficulty, tag, searchQuery, sortBy],
+    queryFn: () => fetchBriefs({ 
+      difficulty: difficulty || undefined, 
+      tag: tag || undefined,
+      search: searchQuery || undefined,
+      sort: sortBy || undefined
+    }),
   });
 
   return (
@@ -25,8 +40,9 @@ export default function Home() {
           <input
             type="text"
             placeholder="Search projects..."
-            className="w-full max-w-md px-4 py-2 border border-border rounded-md bg-bg text-text"
-            disabled
+            value={localSearch}
+            onChange={(e) => setLocalSearch(e.target.value)}
+            className="w-full max-w-md px-4 py-2 border border-border rounded-md bg-bg text-text min-h-[48px]"
           />
         </div>
 
@@ -36,8 +52,14 @@ export default function Home() {
         {/* Sort Controls */}
         <div className="mb-4 flex items-center gap-2">
           <span className="text-text-muted text-sm">Sort by:</span>
-          <select className="px-3 py-1 border border-border rounded-md bg-bg text-text" disabled>
-            <option>Most Recent</option>
+          <select 
+            value={sortBy || ""}
+            onChange={(e) => setSortBy(e.target.value || null)}
+            className="px-3 py-1 border border-border rounded-md bg-bg text-text min-h-[48px]"
+          >
+            <option value="">Most Recent</option>
+            <option value="difficulty_asc">Difficulty (Easy to Hard)</option>
+            <option value="difficulty_desc">Difficulty (Hard to Easy)</option>
           </select>
         </div>
 
@@ -91,7 +113,8 @@ export default function Home() {
       {/* Footer */}
       <footer className="border-t border-border bg-bg-alt py-6 mt-8">
         <div className="max-w-7xl mx-auto px-4 text-center text-text-muted text-sm">
-          <p>The Problem Network — Translating real-world technical problems into junior-dev-friendly briefs</p>
+          <p className="mb-2">The Problem Network — Translating real-world technical problems into junior-dev-friendly briefs</p>
+          <a href="/privacy" className="text-accent hover:text-accent-hover transition-colors">Privacy</a>
         </div>
       </footer>
     </div>
