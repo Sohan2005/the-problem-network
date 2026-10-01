@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.orm import Session
 from typing import Optional
 from db.database import get_db
-from db.queries import create_problem, create_brief, get_or_create_tag, attach_tag_to_brief, get_problem_by_url, list_briefs, get_brief_by_id
+from db.queries import create_problem, create_brief, get_or_create_tag, attach_tag_to_brief, get_problem_by_url, list_briefs, get_brief_by_id, get_brief_stats
 from ingestion.github_ingest import fetch_good_first_issues
 from ingestion.devpost_ingest import fetch_hackathon_challenges
 from ingestion.blog_ingest import fetch_multiple_blog_posts
@@ -10,9 +10,14 @@ from llm.translate import translate_issue_to_brief
 
 router = APIRouter(prefix="/briefs")
 
+@router.get("/stats")
+def get_stats(db: Session = Depends(get_db)):
+    """Get brief statistics: total count, recent count (7 days), last updated"""
+    return get_brief_stats(db)
+
 @router.get("/")
-def get_briefs(difficulty: Optional[str] = Query(None), tag: Optional[str] = Query(None), db: Session = Depends(get_db)):
-    briefs = list_briefs(db, difficulty=difficulty, tag=tag)
+def get_briefs(difficulty: Optional[str] = Query(None), tag: Optional[str] = Query(None), search: Optional[str] = Query(None), sort: Optional[str] = Query(None), db: Session = Depends(get_db)):
+    briefs = list_briefs(db, difficulty=difficulty, tag=tag, search=search, sort=sort)
     return [
         {
             "id": b.id,
@@ -36,8 +41,14 @@ def get_brief(brief_id: int, db: Session = Depends(get_db)):
         "difficulty": brief.difficulty,
         "core_task": brief.core_task,
         "recommended_stack": brief.recommended_stack,
+        "target_user": brief.target_user,
+        "suggested_features": brief.suggested_features,
+        "learning_outcomes": brief.learning_outcomes,
+        "what_youll_need": brief.what_youll_need,
+        "how_to_begin": brief.how_to_begin,
         "tags": [t.name for t in brief.tags],
         "source_url": brief.problem.source_url if brief.problem else None,
+        "source_platform": brief.problem.source if brief.problem else None,
     }
 
 @router.post("/ingest/{repo:path}")
