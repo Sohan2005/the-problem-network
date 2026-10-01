@@ -4,6 +4,7 @@ module.exports = {
     './app/**/*.{js,ts,jsx,tsx,mdx}',
     './components/**/*.{js,ts,jsx,tsx,mdx}',
   ],
+  darkMode: 'class',
   theme: {
     extend: {
       colors: {
@@ -64,6 +65,7 @@ module.exports = {
         dropdown: 'var(--duration-dropdown)',
         modal: 'var(--duration-modal)',
         max: 'var(--duration-max)',
+        pulse: 'var(--duration-pulse)',
       },
     },
   },
