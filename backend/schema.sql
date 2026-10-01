@@ -42,3 +42,28 @@ CREATE TABLE IF NOT EXISTS users (
     hashed_password VARCHAR(255) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Create raw_ideas staging table for forum-sourced ideas
+CREATE TABLE IF NOT EXISTS raw_ideas (
+    id SERIAL PRIMARY KEY,
+    source VARCHAR(50) NOT NULL,
+    source_url VARCHAR(500) NOT NULL UNIQUE,
+    raw_title VARCHAR(500) NOT NULL,
+    raw_text TEXT NOT NULL,
+    author VARCHAR(100),
+    matched_keyword VARCHAR(100),
+    passed_prefilter BOOLEAN,
+    prefilter_reject_reason TEXT,
+    fetched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    processed_at TIMESTAMP,
+    is_valid_idea BOOLEAN,
+    rejection_reason TEXT,
+    extracted_title VARCHAR(500),
+    problem_summary TEXT,
+    target_user VARCHAR(300),
+    suggested_features JSONB,
+    difficulty_estimate VARCHAR(20),
+    suggested_tech_stack JSONB,
+    learning_outcomes JSONB,
+    embedding vector(768)
+);
