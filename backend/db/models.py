@@ -54,14 +54,6 @@ class Tag(Base):
     
     briefs = relationship("Brief", secondary=brief_tags, back_populates="tags")
 
-class User(Base):
-    __tablename__ = "users"
-    
-    id = Column(Integer, primary_key=True)
-    email = Column(String(255), nullable=False, unique=True)
-    hashed_password = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
 class DuplicateCandidate(Base):
     """Log for candidates rejected as duplicates (similarity > 0.88)"""
     __tablename__ = "duplicate_candidates"

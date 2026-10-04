@@ -35,14 +35,6 @@ CREATE TABLE IF NOT EXISTS brief_tags (
     PRIMARY KEY (brief_id, tag_id)
 );
 
--- Create users table
-CREATE TABLE IF NOT EXISTS users (
-    id SERIAL PRIMARY KEY,
-    email VARCHAR(255) NOT NULL UNIQUE,
-    hashed_password VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
 -- Create raw_ideas staging table for forum-sourced ideas
 CREATE TABLE IF NOT EXISTS raw_ideas (
     id SERIAL PRIMARY KEY,
