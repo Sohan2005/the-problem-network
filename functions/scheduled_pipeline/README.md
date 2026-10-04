@@ -59,7 +59,7 @@ This will:
   - `STACKEXCHANGE_API_KEY`
 
 ### Step 2: Update local.settings.json
-After Key Vault setup, update `functions/weekly_ingest/local.settings.json` with your Key Vault URI:
+After Key Vault setup, update `functions/scheduled_pipeline/local.settings.json` with your Key Vault URI:
 
 ```json
 {
@@ -78,7 +78,7 @@ Replace `YOUR-KV-NAME` with your actual Key Vault name.
 
 ### Step 3: Test Locally
 ```powershell
-cd functions/weekly_ingest
+cd functions/scheduled_pipeline
 func start
 ```
 
