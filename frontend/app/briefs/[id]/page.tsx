@@ -84,6 +84,20 @@ export default function BriefDetailPage() {
     }
   };
 
+  // Map stored source platform values to display names
+  const getSourceName = (platform: string) => {
+    const value = platform.toLowerCase();
+    if (value === "hackernews") return "Hacker News";
+    if (value.startsWith("stackexchange")) return "Stack Exchange";
+    if (value.includes("github")) return "GitHub";
+    if (value.includes("blog")) return "Blog";
+    return value
+      .split("_")
+      .filter(Boolean)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
+  };
+
   return (
     <div className="min-h-screen bg-bg">
       <Navbar />
@@ -184,7 +198,9 @@ export default function BriefDetailPage() {
               rel="noopener noreferrer"
               className="text-accent hover:text-accent-hover transition-colors"
             >
-              {brief.source_platform ? `View original post on ${brief.source_platform}` : "View original source"}
+              {brief.source_platform && brief.source_platform !== "web_grounding"
+                ? `View original post on ${getSourceName(brief.source_platform)}`
+                : "View original source"}
               {getDomain(brief.source_url) && ` (${getDomain(brief.source_url)})`}
             </a>
           </div>
