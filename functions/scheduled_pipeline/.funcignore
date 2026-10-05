@@ -1,0 +1,10 @@
+local.settings.json
+.env
+.env.*
+.venv
+.vscode
+__pycache__
+*.pyc
+.git*
+tests
+README.md
