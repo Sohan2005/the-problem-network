@@ -1,8 +1,22 @@
+import { useState, useEffect } from "react";
 import { useFilterStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 
 export default function FilterBar() {
   const { difficulty, tag, setDifficulty, setTag, clearFilters } = useFilterStore();
+  const [localTag, setLocalTag] = useState(tag || "");
+
+  // Debounced tag filter
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setTag(localTag || null);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [localTag, setTag]);
+
+  useEffect(() => {
+    if (tag === null) setLocalTag("");
+  }, [tag]);
 
   return (
     <div className="mb-4 flex flex-wrap items-center gap-3">
@@ -18,8 +32,8 @@ export default function FilterBar() {
       </select>
       <input
         type="text"
-        value={tag || ""}
-        onChange={(e) => setTag(e.target.value || null)}
+        value={localTag}
+        onChange={(e) => setLocalTag(e.target.value)}
         placeholder="Filter by tag..."
         className="px-3 py-2 border border-border rounded-md bg-bg text-text min-h-[48px] flex-1 min-w-[200px]"
       />

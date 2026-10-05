@@ -53,10 +53,11 @@ def list_briefs(db: Session, difficulty: Optional[str] = None, tag: Optional[str
     
     if tag:
         # Filter by recommended_stack (JSON array) instead of tags relationship
-        # Cast to JSONB and use @> operator for array containment
-        from sqlalchemy import cast
+        # Lowercase the JSON text, cast to JSONB and use @> for case-insensitive array containment
+        from sqlalchemy import cast, Text
         from sqlalchemy.dialects.postgresql import JSONB
-        query = query.filter(cast(Brief.recommended_stack, JSONB).op('@>')([tag]))
+        stack_lower = cast(func.lower(cast(Brief.recommended_stack, Text)), JSONB)
+        query = query.filter(stack_lower.op('@>')([tag.lower()]))
     
     if search:
         search_term = f"%{search}%"
