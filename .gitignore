@@ -17,6 +17,7 @@ frontend/.vscode/
 functions/scheduled_pipeline/backend/
 **/__pycache__/
 *.pyc
+*.tsbuildinfo
 
 # Data export / log artifacts
 backend/duplicates_resolved.log
