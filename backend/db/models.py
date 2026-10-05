@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Table, Boolean, JSON, Float
+from sqlalchemy import Column, Integer, String, Text, DateTime, Date, ForeignKey, Table, Boolean, JSON, Float, Numeric, CheckConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime
 from pgvector.sqlalchemy import Vector
@@ -29,7 +30,7 @@ class Brief(Base):
     
     id = Column(Integer, primary_key=True)
     problem_id = Column(Integer, ForeignKey("problems.id"), nullable=True, unique=True)  # Made nullable for new pipeline
-    raw_idea_id = Column(Integer, ForeignKey("raw_ideas.id"), nullable=True)  # Added to link back to RawIdea source
+    raw_idea_id = Column(Integer, ForeignKey("raw_ideas.id"), nullable=True, unique=True)  # Added to link back to RawIdea source
     title = Column(String(200), nullable=False)
     difficulty = Column(String(20), nullable=False)
     core_task = Column(Text, nullable=False)
@@ -44,7 +45,7 @@ class Brief(Base):
     embedding = Column(Vector(3072), nullable=True)  # Updated to 3072 for gemini-embedding-001
     
     problem = relationship("Problem", back_populates="brief")
-    raw_idea = relationship("RawIdea")
+    raw_idea = relationship("RawIdea", foreign_keys=[raw_idea_id])
     tags = relationship("Tag", secondary=brief_tags, back_populates="briefs")
 
 class Tag(Base):
@@ -69,6 +70,9 @@ class DuplicateCandidate(Base):
 
 class RawIdea(Base):
     __tablename__ = "raw_ideas"
+    __table_args__ = (
+        CheckConstraint("gate_status IN ('pending', 'passed', 'failed', 'duplicate')", name="raw_ideas_gate_status_check"),
+    )
     
     id = Column(Integer, primary_key=True)
     source = Column(String(50), nullable=False)  # "hackernews", "reddit", "indiehackers"
@@ -103,3 +107,36 @@ class RawIdea(Base):
     what_youll_need = Column(Text, nullable=True)  # Prerequisites for Getting Started
     how_to_begin = Column(Text, nullable=True)  # First steps for Getting Started
     embedding = Column(Vector(3072), nullable=True)  # Updated to 3072 for gemini-embedding-001
+    # Pipeline state (migration 001_pipeline_state.sql)
+    canonical_url = Column(Text, nullable=True, unique=True)
+    extraction_attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    last_error = Column(Text, nullable=True)
+    gate_status = Column(Text, nullable=False, default="pending", server_default="pending")  # pending, passed, failed, duplicate
+    gate_failures = Column(JSONB, nullable=True)
+    gate_score = Column(Numeric, nullable=True)
+    gated_at = Column(DateTime(timezone=True), nullable=True)
+    published_brief_id = Column(Integer, ForeignKey("briefs.id"), nullable=True)
+    published_at = Column(DateTime(timezone=True), nullable=True)
+
+class PublishDay(Base):
+    __tablename__ = "publish_days"
+    
+    day = Column(Date, primary_key=True)
+    target = Column(Integer, nullable=True)
+    published = Column(Integer, nullable=True)
+    is_flexible_day = Column(Boolean, nullable=True)
+    buffer_before = Column(Integer, nullable=True)
+    buffer_after = Column(Integer, nullable=True)
+    note = Column(Text, nullable=True)
+
+class PipelineRun(Base):
+    __tablename__ = "pipeline_runs"
+    
+    id = Column(Integer, primary_key=True)
+    stage = Column(Text, nullable=False)
+    started_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    rows_in = Column(Integer, nullable=True)
+    rows_out = Column(Integer, nullable=True)
+    status = Column(Text, nullable=True)
+    error = Column(Text, nullable=True)
