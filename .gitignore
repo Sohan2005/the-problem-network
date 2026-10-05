@@ -55,7 +55,6 @@ backend/clear_*.py
 backend/count_*.py
 backend/create_raw_ideas_table.py
 backend/debug_*.py
-backend/dedup_check.py
 backend/delete_*.py
 backend/find_*.py
 backend/fix_*.py
