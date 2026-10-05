@@ -1,3 +1,4 @@
+import re
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
@@ -134,3 +135,15 @@ def create_raw_idea(db: Session, source: str, source_url: str, raw_title: str, r
 def get_raw_idea_by_url(db: Session, source_url: str):
     from .models import RawIdea
     return db.query(RawIdea).filter(RawIdea.source_url == source_url).first()
+
+# Must stay identical to the canonical_url backfill in db/migrations/001_pipeline_state.sql (statement 12):
+# btrim() trims spaces only, "." matches newlines and "$" is end of string in PostgreSQL regexes.
+_URL_PARTS = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://[^/?#]*)?([^?#]*)(\?[^#]*)?(#.*)?", re.DOTALL)
+
+def canonicalize_url(url: str) -> str:
+    """Lowercase scheme and host, drop the fragment and utm_* parameters, trim trailing slashes, keep other parameters in order."""
+    origin, path, query, _fragment = _URL_PARTS.fullmatch(url.strip(" ")).groups()
+    origin = (origin or "").lower()
+    path = re.sub(r"/+\Z", "", path or "")
+    params = [kv for kv in (query[1:].split("&") if query else []) if kv and not kv.lower().startswith("utm_")]
+    return origin + path + ("?" + "&".join(params) if params else "")
