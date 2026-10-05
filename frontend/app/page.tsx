@@ -21,6 +21,10 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [localSearch, setSearchQuery]);
 
+  useEffect(() => {
+    if (searchQuery === null) setLocalSearch("");
+  }, [searchQuery]);
+
   const { data: briefs, isLoading, error } = useQuery({
     queryKey: ["briefs", difficulty, tag, searchQuery, sortBy],
     queryFn: () => fetchBriefs({ 
