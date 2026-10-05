@@ -44,7 +44,7 @@ def get_problem_by_url(db: Session, source_url: str):
 
 def list_briefs(db: Session, difficulty: Optional[str] = None, tag: Optional[str] = None, search: Optional[str] = None, sort: Optional[str] = None):
     from .models import Brief, Tag
-    from sqlalchemy import or_, case
+    from sqlalchemy import or_, case, func
     
     query = db.query(Brief)
     
@@ -68,21 +68,22 @@ def list_briefs(db: Session, difficulty: Optional[str] = None, tag: Optional[str
         )
     
     # Sort by difficulty
+    difficulty_level = func.lower(Brief.difficulty)
     if sort == "difficulty_asc":
         query = query.order_by(
             case(
-                (Brief.difficulty == "Beginner", 1),
-                (Brief.difficulty == "Intermediate", 2),
-                (Brief.difficulty == "Advanced", 3),
+                (difficulty_level == "beginner", 1),
+                (difficulty_level == "intermediate", 2),
+                (difficulty_level == "advanced", 3),
                 else_=4
             )
         )
     elif sort == "difficulty_desc":
         query = query.order_by(
             case(
-                (Brief.difficulty == "Advanced", 1),
-                (Brief.difficulty == "Intermediate", 2),
-                (Brief.difficulty == "Beginner", 3),
+                (difficulty_level == "advanced", 1),
+                (difficulty_level == "intermediate", 2),
+                (difficulty_level == "beginner", 3),
                 else_=4
             )
         )
