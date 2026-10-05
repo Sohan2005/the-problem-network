@@ -43,8 +43,9 @@ export async function fetchBriefStats(): Promise<{
   return response.json();
 }
 
-export async function fetchBriefById(id: number): Promise<BriefDetail> {
+export async function fetchBriefById(id: number): Promise<BriefDetail | null> {
   const response = await fetch(`${API_URL}/briefs/${id}`);
+  if (response.status === 404) return null;
   if (!response.ok) {
     throw new Error("Failed to fetch brief");
   }
