@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Button } from "./ui/button";
+import { buttonClassName } from "./ui/button";
 import ThemeToggle from "./ThemeToggle";
 import FreshnessStrip from "./FreshnessStrip";
 
@@ -25,13 +25,11 @@ export default function Navbar() {
             The Problem Network
           </Link>
           <div className="flex items-center gap-4">
-            <Link href="/saved">
-              <Button 
-                variant={isSavedActive ? "primary" : "secondary"} 
-                className="min-h-[48px] min-w-[48px]"
-              >
-                Saved
-              </Button>
+            <Link
+              href="/saved"
+              className={buttonClassName(isSavedActive ? "primary" : "secondary", "min-h-[48px] min-w-[48px]")}
+            >
+              Saved
             </Link>
             <ThemeToggle />
           </div>

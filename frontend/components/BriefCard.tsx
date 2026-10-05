@@ -20,8 +20,7 @@ export default function BriefCard({ brief, onFavoriteChange }: BriefCardProps) {
     setIsSaved(isFavorite(brief.id));
   }, [brief.id]);
 
-  const handleFavorite = (e: React.MouseEvent) => {
-    e.preventDefault();
+  const handleFavorite = () => {
     const saved = toggleFavorite(brief.id).includes(brief.id);
     setIsSaved(saved);
     onFavoriteChange?.(brief.id, saved);
@@ -55,17 +54,17 @@ export default function BriefCard({ brief, onFavoriteChange }: BriefCardProps) {
             ))}
           </div>
         )}
-
-        {/* Favorite Control */}
-        <Button
-          variant="ghost"
-          onClick={handleFavorite}
-          className="min-h-[48px] min-w-[48px] text-accent"
-        >
-          <span className="mr-2">{isSaved ? "♥" : "♡"}</span>
-          Favorite
-        </Button>
       </Link>
+
+      {/* Favorite Control */}
+      <Button
+        variant="ghost"
+        onClick={handleFavorite}
+        className="min-h-[48px] min-w-[48px] text-accent"
+      >
+        <span className="mr-2">{isSaved ? "♥" : "♡"}</span>
+        Favorite
+      </Button>
     </Card>
   );
 }
