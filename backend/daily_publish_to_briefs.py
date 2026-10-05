@@ -84,7 +84,7 @@ def daily_publish_to_briefs(limit=10):
                 target_user=target,
                 suggested_features=features_list,
                 learning_outcomes=learning_list,
-                raw_idea_id=raw_idea.id,  # Link back to RawIdea source
+                raw_idea_id=record.id,  # Link back to RawIdea source
                 created_at=datetime.utcnow(),
                 source_date=source_date
             )
