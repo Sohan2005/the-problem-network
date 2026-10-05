@@ -1,4 +1,6 @@
+import html
 import re
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
@@ -147,3 +149,75 @@ def canonicalize_url(url: str) -> str:
     path = re.sub(r"/+\Z", "", path or "")
     params = [kv for kv in (query[1:].split("&") if query else []) if kv and not kv.lower().startswith("utm_")]
     return origin + path + ("?" + "&".join(params) if params else "")
+
+RAW_TITLE_MAX = 500
+RAW_TEXT_MAX = 8000
+SOURCE_DATE_MAX_AGE = timedelta(days=3 * 365)
+
+def _naive_utc(value: datetime) -> datetime:
+    return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
+
+def _clip(value, limit: int):
+    return value[:limit] if isinstance(value, str) else None
+
+def _raw_idea_reject_reason(item, now: datetime):
+    if not isinstance(item, dict):
+        return "not a dict"
+    for key in ("source", "source_url", "raw_title", "raw_text"):
+        value = item.get(key)
+        if not isinstance(value, str) or not value.strip():
+            return f"missing {key}"
+    if len(item["source"]) > 50:
+        return "source too long"
+    if len(item["source_url"]) > 500:
+        return "source_url too long"
+    source_date = item.get("source_date")
+    if source_date is not None:
+        if not isinstance(source_date, datetime):
+            return "invalid source_date"
+        source_date = _naive_utc(source_date)
+        if source_date > now:
+            return "source_date in future"
+        if source_date < now - SOURCE_DATE_MAX_AGE:
+            return "source_date too old"
+    return None
+
+def insert_raw_ideas(db: Session, items) -> dict:
+    """Validate and insert scraped ideas, skipping any whose source_url or canonical_url is already stored. Commits once; no embeddings."""
+    from sqlalchemy.dialects.postgresql import insert
+    from .models import RawIdea
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    rows, seen, rejected, batch_duplicates = [], set(), [], 0
+    for item in items:
+        reason = _raw_idea_reject_reason(item, now)
+        if reason:
+            rejected.append((item.get("source_url") if isinstance(item, dict) else None, reason))
+            continue
+        canonical_url = canonicalize_url(item["source_url"])
+        if canonical_url in seen:
+            batch_duplicates += 1
+            continue
+        seen.add(canonical_url)
+        source_date = item.get("source_date")
+        rows.append({
+            "source": item["source"],
+            "source_url": item["source_url"],
+            "raw_title": html.unescape(item["raw_title"])[:RAW_TITLE_MAX],
+            "raw_text": item["raw_text"][:RAW_TEXT_MAX],
+            "author": _clip(item.get("author"), 100),
+            "matched_keyword": _clip(item.get("matched_keyword"), 100),
+            "confidence_flag": _clip(item.get("confidence_flag"), 20),
+            "source_date": _naive_utc(source_date) if source_date is not None else None,
+            "canonical_url": canonical_url,
+            "fetched_at": now,
+        })
+    inserted = 0
+    if rows:
+        try:
+            result = db.execute(insert(RawIdea.__table__).on_conflict_do_nothing().returning(RawIdea.__table__.c.id), rows)
+            inserted = len(result.all())
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+    return {"inserted": inserted, "skipped_duplicate": batch_duplicates + len(rows) - inserted, "rejected": rejected}
