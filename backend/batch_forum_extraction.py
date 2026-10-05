@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import argparse
+from datetime import datetime
 from dotenv import load_dotenv
 
 # Add parent directory to path for imports
