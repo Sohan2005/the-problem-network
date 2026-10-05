@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Navbar from "@/components/Navbar";
 import BriefCard from "@/components/BriefCard";
@@ -7,7 +8,11 @@ import { getFavorites } from "@/lib/favorites";
 import { fetchBriefs, Brief } from "@/lib/api";
 
 export default function SavedPage() {
-  const favoriteIds = getFavorites();
+  const [favoriteIds, setFavoriteIds] = useState<number[]>([]);
+
+  useEffect(() => {
+    setFavoriteIds(getFavorites());
+  }, []);
 
   const { data: allBriefs, isLoading } = useQuery({
     queryKey: ["briefs"],
@@ -44,7 +49,7 @@ export default function SavedPage() {
         {savedBriefs.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {savedBriefs.map((brief: Brief) => (
-              <BriefCard key={brief.id} brief={brief} />
+              <BriefCard key={brief.id} brief={brief} onFavoriteChange={() => setFavoriteIds(getFavorites())} />
             ))}
           </div>
         ) : (

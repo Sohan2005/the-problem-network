@@ -10,9 +10,10 @@ import { getFavorites, toggleFavorite, isFavorite } from "@/lib/favorites";
 
 interface BriefCardProps {
   brief: Brief;
+  onFavoriteChange?: (briefId: number, isSaved: boolean) => void;
 }
 
-export default function BriefCard({ brief }: BriefCardProps) {
+export default function BriefCard({ brief, onFavoriteChange }: BriefCardProps) {
   const [isSaved, setIsSaved] = useState(false);
 
   useEffect(() => {
@@ -21,8 +22,9 @@ export default function BriefCard({ brief }: BriefCardProps) {
 
   const handleFavorite = (e: React.MouseEvent) => {
     e.preventDefault();
-    toggleFavorite(brief.id);
-    setIsSaved(!isSaved);
+    const saved = toggleFavorite(brief.id).includes(brief.id);
+    setIsSaved(saved);
+    onFavoriteChange?.(brief.id, saved);
   };
 
   return (
