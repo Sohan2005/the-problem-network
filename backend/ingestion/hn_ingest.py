@@ -1,149 +1,132 @@
 import os
 import sys
+import time
+from datetime import datetime, timezone
 import requests
 from dotenv import load_dotenv
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from db.database import SessionLocal
-from db.queries import create_raw_idea, get_raw_idea_by_url
+from db.queries import insert_raw_ideas
 
 # Load .env from project root (relative to this script)
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 env_path = os.path.join(project_root, '.env')
 load_dotenv(env_path)
 
-def fetch_hn_ideas_via_context_stitching():
+SOURCE = "hackernews"
+ALGOLIA_URL = "https://hn.algolia.com/api/v1/search"
+REQUEST_TIMEOUT = 15
+RESULTS_PER_KEYWORD = 50
+MAX_POST_AGE_YEARS = 3
+DEFAULT_BUDGET_SECONDS = 240
+DEFAULT_MAX_ITEMS = 1000
+
+# Search modes: ask_hn only (direct idea requests) - higher signal than comment mining
+SEARCH_MODES = ["ask_hn"]
+
+# Keyword buckets - expanded with broader phrasings
+BUCKET_A = ["would gladly pay", "i would pay monthly", "surprised no one sells", "shut up and take my money", "is there a paid version"]
+BUCKET_B = ["scratch my own itch", "frustratingly bad", "i ended up writing a script", "why is there no open source alternative", "hate the current options"]
+BUCKET_C = ["wish there was a tool", "someone should build", "is there a lightweight alternative", "gap in the market"]
+BUCKET_D = ["is there a tool that", "why doesn't this exist", "looking for an app/tool that", "wish there was a way to"]
+KEYWORDS = BUCKET_A + BUCKET_B + BUCKET_C + BUCKET_D
+
+def _hit_to_item(hit: dict, search_mode: str, keyword: str):
+    object_id = hit.get("objectID")
+    story_title = hit.get("story_title") or ""
+    story_url = hit.get("story_url") or ""
+    comment_text = hit.get("comment_text") or ""
+    story_text = hit.get("story_text") or ""  # For ask_hn posts, use story_text
+    created_at_i = hit.get("created_at_i")  # Unix timestamp of post creation
+
+    if not object_id or not story_title:
+        return None
+    if search_mode == "comment" and not comment_text:
+        return None
+    if search_mode == "ask_hn" and not story_text:
+        return None
+
+    body = f"MATCHING COMMENT: {comment_text}" if search_mode == "comment" else f"POST TEXT: {story_text}"
+    source_date = None
+    if isinstance(created_at_i, (int, float)):
+        source_date = datetime.fromtimestamp(created_at_i, timezone.utc).replace(tzinfo=None)
+    return {
+        "source": SOURCE,
+        "source_url": f"https://news.ycombinator.com/item?id={object_id}",
+        "raw_title": story_title,
+        "raw_text": f"STORY: {story_title}\n\nSTORY URL: {story_url}\n\n{body}",
+        "author": hit.get("author"),
+        "source_date": source_date,
+        "matched_keyword": keyword,
+    }
+
+def fetch_candidates(*, budget_seconds, max_items, since=None) -> list:
     """
-    Context-Stitching Architecture for HN Idea Discovery:
-    STEP A: Algolia Search API for keyword matching
-    STEP B: Use Algolia's built-in story_title/story_url (no Firebase needed for basic context)
-    STEP C: Store structured context in raw_ideas table
+    Search Algolia for Ask HN posts matching need-signal keywords (last MAX_POST_AGE_YEARS, Show HN excluded).
+    Returns raw_ideas item dicts for insert_raw_ideas; no database access. Stops early when the
+    time budget or max_items is reached and returns what it has.
     """
-    
-    # Keyword buckets - expanded with broader phrasings
-    bucket_a = ["would gladly pay", "i would pay monthly", "surprised no one sells", "shut up and take my money", "is there a paid version"]
-    bucket_b = ["scratch my own itch", "frustratingly bad", "i ended up writing a script", "why is there no open source alternative", "hate the current options"]
-    bucket_c = ["wish there was a tool", "someone should build", "is there a lightweight alternative", "gap in the market"]
-    bucket_d = ["someone should build", "is there a tool that", "why doesn't this exist", "looking for an app/tool that", "wish there was a way to"]
-    
-    all_keywords = bucket_a + bucket_b + bucket_c + bucket_d
-    results_limit = 50  # per phrase (increased from 5 for larger candidate pool)
-    
-    # Search modes: ask_hn only (direct idea requests) - higher signal than comment mining
-    search_modes = ["ask_hn"]
-    
-    # Date filtering: only pull posts from last N years (configurable)
-    max_post_age_years = 3  # Configurable: change to 1, 2, 3, etc.
-    
-    # Calculate Unix timestamp for N years ago
-    import time
-    current_timestamp = int(time.time())
-    seconds_per_year = 365 * 24 * 60 * 60
-    min_timestamp = current_timestamp - (max_post_age_years * seconds_per_year)
-    
-    db = SessionLocal()
-    processed_count = 0
-    skipped_count = 0
-    
-    try:
-        for search_mode in search_modes:
-            for keyword in all_keywords:
-                print(f"Searching for: '{keyword}' (mode: {search_mode})")
-                
-                # STEP A: Algolia Search API with date filtering and show_hn exclusion
-                algolia_url = "https://hn.algolia.com/api/v1/search"
-                params = {
-                    "tags": search_mode,
-                    "query": keyword,
-                    "hitsPerPage": results_limit,
-                    "numericFilters": f"created_at_i>{min_timestamp}",
-                    "tagFilters": "-show_hn"  # Exclude Show HN posts (completed projects)
-                }
-                
-                response = requests.get(algolia_url, params=params)
+    deadline = time.monotonic() + budget_seconds
+    min_timestamp = int(time.time()) - MAX_POST_AGE_YEARS * 365 * 24 * 60 * 60
+    if since is not None:
+        since_utc = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
+        min_timestamp = max(min_timestamp, int(since_utc.timestamp()))
+
+    candidates, seen_urls = [], set()
+    for search_mode in SEARCH_MODES:
+        for keyword in KEYWORDS:
+            if len(candidates) >= max_items:
+                return candidates
+            if time.monotonic() >= deadline:
+                print(f"  Budget exhausted; returning {len(candidates)} candidates")
+                return candidates
+            params = {
+                "tags": search_mode,
+                "query": keyword,
+                "hitsPerPage": RESULTS_PER_KEYWORD,
+                "numericFilters": f"created_at_i>{min_timestamp}",
+                "tagFilters": "-show_hn"  # Exclude Show HN posts (completed projects)
+            }
+            try:
+                response = requests.get(ALGOLIA_URL, params=params, timeout=REQUEST_TIMEOUT)
                 response.raise_for_status()
-                search_results = response.json().get("hits", [])
-                
-                print(f"  Found {len(search_results)} results")
-                
-                for hit in search_results:
-                    comment_id = hit.get("objectID")
-                    comment_text = hit.get("comment_text", "")
-                    story_title = hit.get("story_title", "")
-                    story_url = hit.get("story_url", "")
-                    author = hit.get("author", "")
-                    created_at_i = hit.get("created_at_i")  # Unix timestamp of post creation
-                    story_text = hit.get("story_text", "")  # For ask_hn posts, use story_text
-                    
-                    # Skip if no comment text (for comment mode)
-                    if search_mode == "comment" and not comment_text:
-                        continue
-                    
-                    # Skip if no story text (for ask_hn mode)
-                    if search_mode == "ask_hn" and not story_text:
-                        continue
-                    
-                    # Skip if no story title (invalid entry)
-                    if not story_title:
-                        continue
-                    
-                    # STEP B: Build structured raw_text (Algolia already provides story context)
-                    if search_mode == "comment":
-                        raw_text = f"STORY: {story_title}\n\n"
-                        raw_text += f"STORY URL: {story_url}\n\n"
-                        raw_text += f"MATCHING COMMENT: {comment_text}"
-                    else:  # ask_hn mode - use story_text for post content
-                        raw_text = f"STORY: {story_title}\n\n"
-                        raw_text += f"STORY URL: {story_url}\n\n"
-                        raw_text += f"POST TEXT: {story_text}"
-                    
-                    # Build source URL (comment permalink)
-                    source_url = f"https://news.ycombinator.com/item?id={comment_id}"
-                    
-                    # Check for duplicates
-                    existing = get_raw_idea_by_url(db, source_url)
-                    if existing:
-                        print(f"    Skipping (already exists)")
-                        skipped_count += 1
-                        continue
-                    
-                    # Store in raw_ideas
-                    idea = create_raw_idea(
-                        db,
-                        source="hackernews",
-                        source_url=source_url,
-                        raw_title=story_title or "Unknown Story",
-                        raw_text=raw_text,
-                        author=author
-                    )
-                    
-                    # Convert Unix timestamp to datetime and store as source_date
-                    from datetime import datetime
-                    source_date = None
-                    if created_at_i:
-                        source_date = datetime.fromtimestamp(created_at_i)
-                    
-                    # Update matched_keyword and source_date separately
-                    from db.models import RawIdea
-                    db.query(RawIdea).filter(RawIdea.id == idea.id).update({
-                        "matched_keyword": keyword,
-                        "source_date": source_date
-                    })
-                    db.commit()
-                    
-                    print(f"    [OK] Stored: {story_title[:50]}... (matched: {keyword})")
-                    processed_count += 1
-                
+                data = response.json()
+            except (requests.RequestException, ValueError) as e:
+                print(f"  Search failed for '{keyword}': {type(e).__name__}")
+                continue
+            hits = data.get("hits") if isinstance(data, dict) else None
+            if not isinstance(hits, list):
+                continue
+            for hit in hits:
+                item = _hit_to_item(hit, search_mode, keyword) if isinstance(hit, dict) else None
+                if item is None or item["source_url"] in seen_urls:
+                    continue
+                seen_urls.add(item["source_url"])
+                candidates.append(item)
+                if len(candidates) >= max_items:
+                    return candidates
+    return candidates
+
+def fetch_hn_ideas_via_context_stitching():
+    """Fetch HN candidates and store them in raw_ideas. Returns the number of new rows."""
+    from db.database import SessionLocal
+
+    candidates = fetch_candidates(budget_seconds=DEFAULT_BUDGET_SECONDS, max_items=DEFAULT_MAX_ITEMS)
+    db = SessionLocal()
+    try:
+        result = insert_raw_ideas(db, candidates)
     finally:
         db.close()
-    
-    print(f"\n=== Summary ===")
-    print(f"Processed successfully: {processed_count}")
-    print(f"Skipped (already exists): {skipped_count}")
-    
-    return processed_count
+
+    print("\n=== Summary ===")
+    print(f"Fetched: {len(candidates)}")
+    print(f"Processed successfully: {result['inserted']}")
+    print(f"Skipped (already exists): {result['skipped_duplicate']}")
+    print(f"Rejected: {len(result['rejected'])}")
+
+    return result["inserted"]
 
 if __name__ == "__main__":
     fetch_hn_ideas_via_context_stitching()
