@@ -44,6 +44,7 @@ class Brief(Base):
     embedding = Column(Vector(3072), nullable=True)  # Updated to 3072 for gemini-embedding-001
     
     problem = relationship("Problem", back_populates="brief")
+    raw_idea = relationship("RawIdea")
     tags = relationship("Tag", secondary=brief_tags, back_populates="briefs")
 
 class Tag(Base):

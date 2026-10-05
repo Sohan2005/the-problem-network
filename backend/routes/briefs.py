@@ -35,6 +35,7 @@ def get_brief(brief_id: int, db: Session = Depends(get_db)):
     brief = get_brief_by_id(db, brief_id)
     if not brief:
         raise HTTPException(status_code=404, detail="Brief not found")
+    source = brief.problem or brief.raw_idea
     return {
         "id": brief.id,
         "title": brief.title,
@@ -47,8 +48,8 @@ def get_brief(brief_id: int, db: Session = Depends(get_db)):
         "what_youll_need": brief.what_youll_need,
         "how_to_begin": brief.how_to_begin,
         "tags": [t.name for t in brief.tags],
-        "source_url": brief.problem.source_url if brief.problem else None,
-        "source_platform": brief.problem.source if brief.problem else None,
+        "source_url": source.source_url if source else None,
+        "source_platform": source.source if source else None,
     }
 
 @router.post("/ingest/{repo:path}")
