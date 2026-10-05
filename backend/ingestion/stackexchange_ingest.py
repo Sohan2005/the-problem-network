@@ -116,15 +116,16 @@ def fetch_softwarerecs_ideas():
                     if answers_response.status_code == 200:
                         answers_data = answers_response.json()
                         answers = answers_data.get("items", [])
+                        good_answer_found = False
                         for answer in answers:
                             answer_score = answer.get("score", 0)
                             if answer_score > score + 2:
                                 # Good answer exists - skip
-                                skipped_count += 1
+                                good_answer_found = True
                                 break
-                        else:
-                            # No good answer found - continue processing
-                            pass
+                        if good_answer_found:
+                            skipped_count += 1
+                            continue
                     else:
                         # Failed to fetch answers - skip to be safe
                         skipped_count += 1
