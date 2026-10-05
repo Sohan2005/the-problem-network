@@ -14,7 +14,7 @@ env_path = os.path.join(project_root, '.env')
 load_dotenv(env_path)
 
 from db.database import SessionLocal
-from db.models import RawIdea
+from db.queries import insert_raw_ideas
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
@@ -115,74 +115,49 @@ Do not include any markdown, explanations, or text outside the JSON."""
 
 def store_grounding_ideas(ideas, prompt_index):
     """
-    Store grounding ideas in raw_ideas table.
+    Store grounding ideas in raw_ideas table through the shared writer.
+    Returns (stored, skipped); skipped covers duplicates and rejected items.
     """
-    db = SessionLocal()
+    items = []
+    for idea in ideas:
+        if not isinstance(idea, dict):
+            items.append(idea)  # rejected by insert_raw_ideas
+            continue
+        publish_date_str = idea.get("publish_date", None)
+        
+        # Parse publish_date if available
+        source_date = None
+        if publish_date_str:
+            try:
+                source_date = datetime.strptime(publish_date_str, "%Y-%m-%d")
+            except (ValueError, TypeError):
+                # Invalid date format, keep as null
+                pass
+        
+        items.append({
+            "source": "web_grounding",
+            "source_url": idea.get("source_url", ""),
+            "raw_title": idea.get("title", ""),
+            "raw_text": idea.get("description", ""),
+            "confidence_flag": idea.get("confidence", "low"),
+            "source_date": source_date,
+        })
     
+    db = SessionLocal()
     try:
-        stored_count = 0
-        skipped_count = 0
-        
-        for idea in ideas:
-            title = idea.get("title", "")
-            description = idea.get("description", "")
-            source_url = idea.get("source_url", "")
-            source_domain = idea.get("source_domain", "")
-            confidence = idea.get("confidence", "low")
-            publish_date_str = idea.get("publish_date", None)
-            
-            # Parse publish_date if available
-            source_date = None
-            if publish_date_str:
-                try:
-                    source_date = datetime.strptime(publish_date_str, "%Y-%m-%d").date()
-                except (ValueError, TypeError):
-                    # Invalid date format, keep as null
-                    pass
-            
-            # Skip if missing critical fields
-            if not title or not description or not source_url:
-                skipped_count += 1
-                continue
-            
-            # Check for duplicate source_url
-            existing = db.query(RawIdea).filter(RawIdea.source_url == source_url).first()
-            if existing:
-                skipped_count += 1
-                print(f"  Skipped duplicate URL: {source_url}")
-                continue
-            
-            # Create raw_idea entry
-            raw_idea = RawIdea(
-                source="web_grounding",
-                source_url=source_url,
-                raw_title=title,
-                raw_text=description,
-                author=None,  # Not available from grounding
-                matched_keyword=None,  # Not keyword-based
-                confidence_flag=confidence,
-                passed_prefilter=None,  # Will be set by Step 2
-                prefilter_reject_reason=None,
-                source_date=source_date,  # Extracted from grounding response
-                fetched_at=datetime.utcnow()
-            )
-            
-            db.add(raw_idea)
-            stored_count += 1
-        
-        db.commit()
-        
-        print(f"Stored {stored_count} ideas from prompt {prompt_index}")
-        print(f"Skipped {skipped_count} ideas (duplicates or missing fields)")
-        
-        return stored_count, skipped_count
-        
+        result = insert_raw_ideas(db, items)
     except Exception as e:
-        print(f"Error storing grounding ideas: {e}")
-        db.rollback()
+        print(f"Error storing grounding ideas: {type(e).__name__}")
         return 0, 0
     finally:
         db.close()
+    
+    stored_count = result["inserted"]
+    skipped_count = result["skipped_duplicate"] + len(result["rejected"])
+    print(f"Stored {stored_count} ideas from prompt {prompt_index}")
+    print(f"Skipped {skipped_count} ideas (duplicates, missing fields or out-of-range dates)")
+    
+    return stored_count, skipped_count
 
 def run_grounding_ingestion(num_prompts=5, max_ideas_per_prompt=10):
     """
