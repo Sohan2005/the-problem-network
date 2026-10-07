@@ -3,6 +3,6 @@ psycopg2-binary
 python-dotenv
 google-generativeai
 requests
-sqlalchemy
+SQLAlchemy>=2.0,<2.1
 pgvector
 google-genai
