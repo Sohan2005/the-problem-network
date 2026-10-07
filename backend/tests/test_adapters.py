@@ -60,6 +60,22 @@ class HackerNewsAdapterTests(unittest.TestCase):
             self.assertEqual(call.kwargs["params"]["tags"], "ask_hn")
             self.assertEqual(call.kwargs["params"]["tagFilters"], "-show_hn")
 
+    def test_story_hit_title_field(self):
+        hit = _hn_hit(1, title="Ask HN: Is there a tool that does X?")
+        del hit["story_title"]
+        items, _ = self.fetch(lambda *a, **k: _response({"hits": [hit]}))
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["raw_title"], "Ask HN: Is there a tool that does X?")
+        self.assertTrue(items[0]["raw_text"].startswith("STORY: Ask HN: Is there a tool that does X?"))
+
+    def test_comment_hit_story_title_field(self):
+        items, _ = self.fetch(lambda *a, **k: _response({"hits": [_hn_hit(1, story_title="Parent story")]}))
+        self.assertEqual(items[0]["raw_title"], "Parent story")
+
+    def test_title_preferred_over_story_title(self):
+        items, _ = self.fetch(lambda *a, **k: _response({"hits": [_hn_hit(1, title="Own title", story_title="Parent")]}))
+        self.assertEqual(items[0]["raw_title"], "Own title")
+
     def test_utc_dates(self):
         items, _ = self.fetch(lambda *a, **k: _response({"hits": [_hn_hit(1)]}))
         self.assertEqual(items[0]["source_date"], _utc(HN_TS))

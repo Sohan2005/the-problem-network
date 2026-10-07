@@ -35,7 +35,7 @@ KEYWORDS = BUCKET_A + BUCKET_B + BUCKET_C + BUCKET_D
 
 def _hit_to_item(hit: dict, search_mode: str, keyword: str):
     object_id = hit.get("objectID")
-    story_title = hit.get("story_title") or ""
+    story_title = hit.get("title") or hit.get("story_title") or ""  # stories carry "title"; comments carry "story_title"
     story_url = hit.get("story_url") or ""
     comment_text = hit.get("comment_text") or ""
     story_text = hit.get("story_text") or ""  # For ask_hn posts, use story_text
