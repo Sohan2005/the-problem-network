@@ -15,7 +15,9 @@ $Files = @(
     "db/queries.py",
     "ingestion/hn_ingest.py",
     "ingestion/stackexchange_ingest.py",
-    "llm/translate.py"
+    "llm/translate.py",
+    "pipeline/__init__.py",
+    "pipeline/ingest.py"
 )
 
 if (Test-Path $TargetRoot) {
