@@ -67,11 +67,9 @@ Convert this issue into a brief following the system instructions."""
     
     return brief
 
-def translate_forum_idea(raw_text, source_url, source_platform):
-    """Extract structured idea from forum post with rejection gate and rescope option"""
-    model = genai.GenerativeModel("gemini-3.5-flash-lite")
-    
-    system_prompt = """You are analyzing forum posts (Hacker News, Reddit, etc.) to extract buildable app/website ideas for student portfolio projects. Your task is to determine if the post contains a valid, buildable idea and extract structured information.
+FORUM_MODEL = "gemini-3.5-flash-lite"
+
+FORUM_SYSTEM_PROMPT = """You are analyzing forum posts (Hacker News, Reddit, etc.) to extract buildable app/website ideas for student portfolio projects. Your task is to determine if the post contains a valid, buildable idea and extract structured information.
 
 CRITICAL: When analyzing the source text, PRIORITIZE the main STORY/POST content over any matching comments. If the main story describes an existing product, reject it regardless of what comments say.
 
@@ -150,15 +148,19 @@ Return ONLY valid JSON matching this exact schema:
   "source_platform": string or null
 }
 Do not include any markdown, explanations, or text outside the JSON."""
-    
+
+def build_forum_prompt(raw_text, source_url, source_platform):
+    """Full prompt text (system instructions + item) for forum idea extraction"""
     prompt = f"""Raw Text: {raw_text}
 Source URL: {source_url}
 Source Platform: {source_platform}
 
 Extract and validate this forum idea following the system instructions."""
-    
-    response = model.generate_content(system_prompt + "\n\n" + prompt)
-    response_text = response.text.strip()
+    return FORUM_SYSTEM_PROMPT + "\n\n" + prompt
+
+def parse_forum_response(response_text):
+    """Parse and validate the model's JSON reply; raises ValueError on malformed output"""
+    response_text = response_text.strip()
     
     if response_text.startswith("```json"):
         response_text = response_text[7:]
@@ -187,3 +189,9 @@ Extract and validate this forum idea following the system instructions."""
         raise ValueError(f"Invalid is_valid_idea value: {idea['is_valid_idea']}")
     
     return idea
+
+def translate_forum_idea(raw_text, source_url, source_platform):
+    """Extract structured idea from forum post with rejection gate and rescope option"""
+    model = genai.GenerativeModel(FORUM_MODEL)
+    response = model.generate_content(build_forum_prompt(raw_text, source_url, source_platform))
+    return parse_forum_response(response.text)
