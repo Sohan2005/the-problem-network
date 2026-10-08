@@ -38,7 +38,7 @@ FLEXIBLE_WEEKDAYS = (2, 5, 6)  # Wednesday, Saturday, Sunday
 BUFFER_TARGET = 15
 VALID_IDEA = ("true", "needs_rescope")
 AI_SOURCES = ("ai_suggested", "web_grounding")  # no fetched post behind them
-AI_MAX_PER_DAY = 2
+AI_MAX_PER_DAY = 5
 
 def source_link(source, url):
     """The URL a brief may show: only real posts fetched from the Hacker News and Stack Exchange APIs."""
