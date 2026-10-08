@@ -6,6 +6,10 @@ anything passed); the publish_days note says whether that was a flexible-day sho
 FLEX_MINIMUM available) or a SHORTFALL. Everything happens in one transaction; the publish_days primary key makes a
 second run for the same day a no-op, and briefs.raw_idea_id is unique, so overlapping runs cannot double-publish.
 
+Real-sourced candidates (fetched posts) are chosen first by gate score; the remainder is filled with AI_SOURCES rows,
+at most AI_MAX_PER_DAY of them per day. Link policy: briefs store no URL; the API shows the raw idea's link only
+when source_link allows it (hackernews and stackexchange_* posts), never for AI_SOURCES.
+
 Gate-passed rows normally carry their embedding. If one has to be embedded and Gemini reports its free quota
 exhausted, choosing stops at that row (it stays unpublished): the briefs built so far are published, or, when none
 were, nothing is written and no publish_days row is added, so a later run can still publish the day. Either way
@@ -32,6 +36,20 @@ FLEX_MINIMUM = 5
 FLEXIBLE_WEEKDAYS = (2, 5, 6)  # Wednesday, Saturday, Sunday
 BUFFER_LOW = 30
 VALID_IDEA = ("true", "needs_rescope")
+AI_SOURCES = ("ai_suggested", "web_grounding")  # no fetched post behind them
+AI_MAX_PER_DAY = 2
+
+def source_link(source, url):
+    """The URL a brief may show: only real posts fetched from the Hacker News and Stack Exchange APIs."""
+    source = source or ""
+    return url if url and (source == "hackernews" or source.startswith("stackexchange_")) else None
+
+def choose(candidates, target: int) -> list:
+    """Real-sourced candidates first (input order = best first), then at most AI_MAX_PER_DAY AI_SOURCES rows."""
+    real = [c for c in candidates if c.source not in AI_SOURCES]
+    ai = [c for c in candidates if c.source in AI_SOURCES]
+    chosen = real[:target]
+    return chosen + ai[:max(0, min(AI_MAX_PER_DAY, target - len(chosen)))]
 
 def brief_fields(record) -> dict:
     """Brief columns for a raw idea: the rescoped version for needs_rescope ideas, the extracted columns otherwise."""
@@ -113,7 +131,8 @@ def run_publish(db, embed_client, today=None) -> dict:
     try:
         candidates = candidates_query(db).all()
         rows_in = len(candidates)
-        chosen = candidates[:TARGET]
+        available = len(choose(candidates, len(candidates)))
+        chosen = choose(candidates, TARGET)
         published_at = datetime.now(timezone.utc)
         brief_ids = []
         for record in chosen:
@@ -139,7 +158,7 @@ def run_publish(db, embed_client, today=None) -> dict:
                     "is_flexible_day": flexible, "buffer_before": rows_in, "buffer_after": rows_in, "note": QUOTA_NOTE,
                     "buffer_low": rows_in < BUFFER_LOW}
         published = len(brief_ids)
-        note = day_note(published, rows_in, flexible)
+        note = day_note(published, available, flexible)
         db.add(PublishDay(day=today, target=TARGET, published=published, is_flexible_day=flexible,
                           buffer_before=rows_in, buffer_after=rows_in - published, note=note))
         db.commit()

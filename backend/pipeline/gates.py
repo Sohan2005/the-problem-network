@@ -1,7 +1,9 @@
 """
 Automated quality gates: decide which extracted ideas may enter the ready queue.
 
-Order: eligibility -> structure -> source red flags -> source grounding -> duplicates -> score.
+Order: eligibility -> structure -> source red flags -> source overlap -> duplicates -> score.
+No gate fetches the source page: ai_suggested and web_grounding rows (AI_SOURCES) have no verifiable post, so they
+are checked against their own raw_text like every other row.
 Every gate function is pure and returns (passed, reason, score_part). A reason is "code: detail", several
 problems from one gate are joined with "; ". Writes only gate_status, gate_failures, gate_score, gated_at,
 duplicate_of_brief_id and (when empty) the row's embedding; never ready_to_publish or published_* columns.
@@ -28,6 +30,7 @@ gate_score (0-100) = structure (25) + source confidence (15) + overlap (25) + sp
 - overlap:     25 * min(1, overlap / OVERLAP_FULL_SCORE)
 - specificity: 20 * min(1, salient words in title+problem / SPECIFICITY_FULL_SCORE)
 - recency:     15 * max(0, 1 - age_days / 1095); 7.5 when source_date is unknown
+AI_SOURCES rows then lose a flat AI_SOURCE_PENALTY (30, floored at 0) so real-sourced items always rank first.
 Within a run, candidates are de-duplicated in score order (higher first; ties: older source_date, then id).
 """
 import html
@@ -46,6 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from db.models import Brief, PipelineRun, RawIdea
 from llm.gemini import QuotaExhausted
 from pipeline.ingest import safe_error
+from pipeline.publish import AI_SOURCES
 
 STAGE = "gates"
 QUOTA_NOTE = "quota"
@@ -80,7 +84,7 @@ DOMAIN_BLOCKLIST = frozenset()
 
 SOURCE_OVERLAP_MIN = {"stackexchange_softwarerecs": 0.15, "web_grounding": 0.20}
 DEFAULT_OVERLAP_MIN = 0.0
-FETCH_TIMEOUT_SECONDS = 10
+AI_SOURCE_PENALTY = 30.0
 
 DUPLICATE_THRESHOLD = 0.85
 
@@ -116,9 +120,6 @@ def own_text(raw_title, raw_text) -> str:
 
 def domain(url) -> str:
     return (urlparse(url or "").hostname or "").lower().removeprefix("www.")
-
-def same_domain(a: str, b: str) -> bool:
-    return bool(a) and (a == b or a.endswith("." + b) or b.endswith("." + a))
 
 def html_to_text(page: str) -> str:
     page = re.sub(r"(?is)<(script|style|noscript)\b.*?</\1>", " ", page or "")
@@ -219,33 +220,11 @@ def gate_red_flags(raw_title, raw_text, source_url):
         problems.append(f"blocked_domain: {domain(source_url)}")
     return not problems, "; ".join(problems) or None, 0.0
 
-def verify_source(url: str, text: str, fetcher, threshold: float):
-    """(ok, detail): the URL must load (status < 400) without leaving its domain, and the page must share the brief's words."""
-    try:
-        status, final_url, page = fetcher.fetch(url, timeout=FETCH_TIMEOUT_SECONDS)
-    except Exception as e:
-        return False, f"fetch failed ({type(e).__name__})"
-    if status >= 400:
-        return False, f"http {status}"
-    if not same_domain(domain(final_url), domain(url)):
-        return False, "redirected to another domain"
-    page_overlap = overlap(text, page)
-    if page_overlap < threshold:
-        return False, f"page overlap {page_overlap:.2f} < {threshold:.2f}"
-    return True, None
-
-def gate_grounding(fields: dict, source: str, source_url: str, raw_title, raw_text, fetcher):
-    problems = []
+def gate_grounding(fields: dict, source: str, raw_title, raw_text):
     threshold = SOURCE_OVERLAP_MIN.get(source, DEFAULT_OVERLAP_MIN)
-    text = brief_text(fields)
-    source_overlap = overlap(text, f"{raw_title} {raw_text}")
-    if source_overlap < threshold:
-        problems.append(f"low_source_overlap: {source_overlap:.2f} < {threshold:.2f}")
-    if source == "web_grounding":
-        ok, detail = verify_source(source_url, text, fetcher, threshold)
-        if not ok:
-            problems.append(f"unverified_source: {detail}")
-    return not problems, "; ".join(problems) or None, 25 * min(1.0, source_overlap / OVERLAP_FULL_SCORE)
+    source_overlap = overlap(brief_text(fields), f"{raw_title} {raw_text}")
+    reason = f"low_source_overlap: {source_overlap:.2f} < {threshold:.2f}" if source_overlap < threshold else None
+    return reason is None, reason, 25 * min(1.0, source_overlap / OVERLAP_FULL_SCORE)
 
 def gate_duplicate(match, threshold: float = DUPLICATE_THRESHOLD):
     """match: (kind, id, similarity) of the nearest vector, or None."""
@@ -264,16 +243,18 @@ def score_extras(fields: dict, confidence_flag, source_date, now: datetime) -> f
         recency = 15 * max(0.0, 1 - age_days / RECENCY_DAYS)
     return confidence + specificity + recency
 
-def evaluate_static(row, fetcher, now: datetime):
+def evaluate_static(row, now: datetime):
     """Gates 2-4 and the score. Returns (failures, score, fields)."""
     fields = effective_fields(row)
     results = {
         "structure": gate_structure(fields),
         "red_flags": gate_red_flags(row.raw_title, row.raw_text, row.source_url),
-        "grounding": gate_grounding(fields, row.source, row.source_url, row.raw_title, row.raw_text, fetcher),
+        "grounding": gate_grounding(fields, row.source, row.raw_title, row.raw_text),
     }
     failures = [{"gate": gate, "reason": reason} for gate, (passed, reason, _) in results.items() if not passed]
     score = sum(part for _, _, part in results.values()) + score_extras(fields, row.confidence_flag, row.source_date, now)
+    if row.source in AI_SOURCES:
+        score = max(0.0, score - AI_SOURCE_PENALTY)
     return failures, round(score, 2), fields
 
 def score_order(item):
@@ -333,7 +314,7 @@ class GeminiEmbedClient:
         return GeminiClient().embed(text)
 
 class RequestsFetcher:
-    """Default fetcher: fetch(url, timeout) -> (status, final_url, page_text). Tests inject a fake."""
+    """Default fetcher handed to top-up sources: fetch(url, timeout) -> (status, final_url, page_text). Tests inject a fake."""
 
     def fetch(self, url: str, timeout: int):
         import requests
@@ -372,7 +353,7 @@ class _Run:
         if self.written % COMMIT_EVERY == 0:
             self.db.commit()
 
-def gate_rows(db, rows, embed_client, fetcher, deadline, now=None, run=None) -> dict:
+def gate_rows(db, rows, embed_client, deadline, now=None, run=None) -> dict:
     """Apply gates 2-6 to already-selected eligible rows and write the outcomes. Rows left pending were not decided."""
     run = run or _Run(db, deadline)
     now = now or datetime.now(timezone.utc)
@@ -381,7 +362,7 @@ def gate_rows(db, rows, embed_client, fetcher, deadline, now=None, run=None) -> 
         if run.out_of_time():
             break
         run.summary["examined"] += 1
-        failures, score, fields = evaluate_static(row, fetcher, now)
+        failures, score, fields = evaluate_static(row, now)
         if failures:
             run.write(row, "failed", failures, score)
         else:
@@ -413,7 +394,7 @@ def gate_rows(db, rows, embed_client, fetcher, deadline, now=None, run=None) -> 
     db.commit()
     return run.summary
 
-def run_gates(db, embed_client, fetcher, max_items, budget_seconds) -> dict:
+def run_gates(db, embed_client, max_items, budget_seconds) -> dict:
     """
     Gate pending extracted rows, oldest first, at most max_items valid rows (plus up to max_items rows the
     extraction rejected, which leave the queue as failed). Logs one pipeline_runs row and returns a summary.
@@ -434,7 +415,7 @@ def run_gates(db, embed_client, fetcher, max_items, budget_seconds) -> dict:
         db.commit()
         if not run.out_of_time():
             rows = db.query(RawIdea).filter(*pending, RawIdea.is_valid_idea.in_(VALID_IDEA)).order_by(*oldest).limit(max_items).all()
-            gate_rows(db, rows, embed_client, fetcher, deadline, run=run)
+            gate_rows(db, rows, embed_client, deadline, run=run)
     except Exception as e:
         db.rollback()
         status, error = "error", safe_error(e)

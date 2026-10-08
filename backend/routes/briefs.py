@@ -7,6 +7,7 @@ from ingestion.github_ingest import fetch_good_first_issues
 from ingestion.devpost_ingest import fetch_hackathon_challenges
 from ingestion.blog_ingest import fetch_multiple_blog_posts
 from llm.translate import translate_issue_to_brief
+from pipeline.publish import source_link
 
 router = APIRouter(prefix="/briefs")
 
@@ -48,7 +49,7 @@ def get_brief(brief_id: int, db: Session = Depends(get_db)):
         "what_youll_need": brief.what_youll_need,
         "how_to_begin": brief.how_to_begin,
         "tags": [t.name for t in brief.tags],
-        "source_url": source.source_url if source else None,
+        "source_url": source_link(source.source, source.source_url) if source else None,
         "source_platform": source.source if source else None,
     }
 

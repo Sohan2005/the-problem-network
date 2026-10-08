@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
-import requests
 from sqlalchemy import text
 
 from db.models import Brief, RawIdea
@@ -42,21 +41,6 @@ def unit(i, j=None, weight=0.0):
     if j is not None:
         vec[j] = weight
     return vec
-
-class FakeFetcher:
-    def __init__(self, responses=None, default=None):
-        self.responses = responses or {}
-        self.default = default
-        self.calls = []
-
-    def fetch(self, url, timeout):
-        self.calls.append((url, timeout))
-        response = self.responses.get(url, self.default)
-        if isinstance(response, Exception):
-            raise response
-        if response is None:
-            raise ConnectionError("no fake response")
-        return response
 
 class FakeEmbed:
     def __init__(self, by_title=None, default=None, error=None):
@@ -204,10 +188,9 @@ class RedFlagGateTests(unittest.TestCase):
         self.assertIn("blocked_domain: spam.example", reason)
 
 class GroundingGateTests(unittest.TestCase):
-    URL = "https://www.reddit.com/r/climbing/comments/abc/route_tracker"
 
-    def grounding(self, source="hackernews", fetcher=None, raw_text=SOURCE_TEXT, brief=None):
-        return gates.gate_grounding(brief or fields(), source, self.URL, "Ask HN", raw_text, fetcher or FakeFetcher())
+    def grounding(self, source="hackernews", raw_text=SOURCE_TEXT, brief=None):
+        return gates.gate_grounding(brief or fields(), source, "Ask HN", raw_text)
 
     def test_hn_overlap_has_no_minimum(self):
         passed, reason, score = self.grounding(raw_text="completely unrelated words here")
@@ -226,39 +209,12 @@ class GroundingGateTests(unittest.TestCase):
     def test_overlap_score_part(self):
         self.assertEqual(self.grounding()[2], 25 * min(1.0, gates.overlap(gates.brief_text(fields()), f"Ask HN {SOURCE_TEXT}") / gates.OVERLAP_FULL_SCORE))
 
-    def test_web_grounding_verified(self):
-        fetcher = FakeFetcher({self.URL: (200, self.URL, "<html><p>Climbers want to track routes, grades and setter notes at small gyms</p></html>")})
-        passed, reason, _ = self.grounding("web_grounding", fetcher)
-        self.assertTrue(passed, reason)
-        self.assertEqual(fetcher.calls, [(self.URL, gates.FETCH_TIMEOUT_SECONDS)])
-
-    def test_web_grounding_subdomain_redirect_allowed(self):
-        fetcher = FakeFetcher({self.URL: (200, "https://old.reddit.com/r/climbing", "climbers routes grades setter notes gyms track")})
-        self.assertTrue(self.grounding("web_grounding", fetcher)[0])
-
-    def assert_unverified(self, response, detail):
-        fetcher = FakeFetcher({self.URL: response})
-        passed, reason, _ = self.grounding("web_grounding", fetcher)
+    def test_web_grounding_checked_against_raw_text_only(self):
+        self.assertTrue(self.grounding("web_grounding")[0])
+        passed, reason, _ = self.grounding("web_grounding", raw_text="nothing shared")
         self.assertFalse(passed)
-        self.assertIn(f"unverified_source: {detail}", reason)
-
-    def test_web_grounding_404(self):
-        self.assert_unverified((404, self.URL, "not found"), "http 404")
-
-    def test_web_grounding_redirect_to_other_domain(self):
-        self.assert_unverified((200, "https://login.example.com/", "climbers routes grades"), "redirected to another domain")
-
-    def test_web_grounding_timeout(self):
-        self.assert_unverified(requests.Timeout("slow"), "fetch failed (Timeout)")
-
-    def test_web_grounding_text_mismatch(self):
-        self.assert_unverified((200, self.URL, "a page about cooking pasta"), "page overlap 0.00 < 0.20")
-
-    def test_failing_overlap_and_source_both_reported(self):
-        passed, reason, _ = self.grounding("web_grounding", FakeFetcher({self.URL: (500, self.URL, "")}), raw_text="nothing shared")
-        self.assertFalse(passed)
-        self.assertIn("low_source_overlap", reason)
-        self.assertIn("unverified_source: http 500", reason)
+        self.assertEqual(reason, "low_source_overlap: 0.00 < 0.20")
+        self.assertTrue(self.grounding("ai_suggested", raw_text="nothing shared")[0])
 
     def test_html_to_text(self):
         self.assertEqual(gates.html_to_text("<script>x=1</script><p>Tom &amp; Jerry</p>").split(), ["Tom", "&", "Jerry"])
@@ -353,8 +309,8 @@ class GateStageTests(RolledBackTestCase):
     def row(self, row_id):
         return self.conn.execute(text("select * from raw_ideas where id = :id"), {"id": row_id}).mappings().one()
 
-    def run_gates(self, embed=None, fetcher=None, max_items=50, budget_seconds=60):
-        return gates.run_gates(self.db, embed or FakeEmbed(), fetcher or FakeFetcher(), max_items=max_items, budget_seconds=budget_seconds)
+    def run_gates(self, embed=None, max_items=50, budget_seconds=60):
+        return gates.run_gates(self.db, embed or FakeEmbed(), max_items=max_items, budget_seconds=budget_seconds)
 
     def test_outcomes_and_written_columns(self):
         stamp = datetime(2026, 1, 2, 3, 4, 5)
@@ -366,20 +322,18 @@ class GateStageTests(RolledBackTestCase):
         wg_url = "https://www.reddit.com/r/climbing/comments/xyz/gym_tracker"
         wg_ok_id = self.make_row(brief={"title": "Climbing gym route log for small gyms"}, source="web_grounding", source_url=wg_url,
                                  raw_text="Climbers at small gyms want to track routes, grades and setter notes.")
-        wg_bad_url = "https://www.quora.com/What-app-should-exist"
-        wg_bad_id = self.make_row(brief={"title": "Climbing gym route board with grades"}, source="web_grounding", source_url=wg_bad_url,
-                                  raw_text="Climbers at small gyms want to track routes, grades and setter notes.")
-        fetcher = FakeFetcher({wg_url: (200, wg_url, "climbers small gyms track routes grades setter notes sent"),
-                               wg_bad_url: (404, wg_bad_url, "")})
+        wg_low_url = "https://www.quora.com/What-app-should-exist"
+        wg_low_id = self.make_row(brief={"title": "Climbing gym route board with grades"}, source="web_grounding", source_url=wg_low_url,
+                                  raw_text="Unrelated words only.")
         embed = FakeEmbed(by_title={GOOD["title"]: unit(0), "Bouldering": unit(1), "Climbing gym route log": unit(2)})
-        before = {i: (self.row(i)["ready_to_publish"], self.row(i)["ready_to_publish_at"]) for i in (good_id, ready_id, bad_id, rejected_id, wg_ok_id, wg_bad_id)}
+        before = {i: (self.row(i)["ready_to_publish"], self.row(i)["ready_to_publish_at"]) for i in (good_id, ready_id, bad_id, rejected_id, wg_ok_id, wg_low_id)}
 
-        summary = self.run_gates(embed, fetcher)
+        summary = self.run_gates(embed)
 
         self.assertEqual({k: summary[k] for k in ("status", "rejected_by_extraction", "examined", "passed", "failed", "duplicate", "deferred")},
                          {"status": "ok", "rejected_by_extraction": 1, "examined": 5, "passed": 3, "failed": 2, "duplicate": 0, "deferred": 0})
         self.assertEqual(summary["failure_reasons"], {"rejected_by_extraction": 1, "missing_field": 1, "bad_difficulty": 1,
-                                                      "red_flag": 2, "unverified_source": 1})
+                                                      "red_flag": 2, "low_source_overlap": 1})
         good = self.row(good_id)
         self.assertEqual((good["gate_status"], good["gate_failures"]), ("passed", []))
         self.assertTrue(0 < float(good["gate_score"]) <= 100)
@@ -395,7 +349,8 @@ class GateStageTests(RolledBackTestCase):
         self.assertEqual((rejected["gate_status"], rejected["gate_failures"], rejected["gate_score"]),
                          ("failed", [{"gate": "eligibility", "reason": "rejected_by_extraction"}], None))
         self.assertEqual(self.row(wg_ok_id)["gate_status"], "passed")
-        self.assertEqual(self.row(wg_bad_id)["gate_failures"], [{"gate": "grounding", "reason": "unverified_source: http 404"}])
+        self.assertLess(float(self.row(wg_ok_id)["gate_score"]), float(good["gate_score"]) - 20)
+        self.assertEqual(self.row(wg_low_id)["gate_failures"], [{"gate": "grounding", "reason": "low_source_overlap: 0.00 < 0.20"}])
         after = {i: (self.row(i)["ready_to_publish"], self.row(i)["ready_to_publish_at"]) for i in before}
         self.assertEqual(after, before)
         self.assertEqual(before[ready_id], (True, stamp))
@@ -491,11 +446,9 @@ class PublishedCalibrationTests(RolledBackTestCase):
         for row in rows:
             row.embedding = briefs[row.id].embedding  # the brief embedding is the same title+problem text
         self.db.commit()
-        # No live HTTP: web grounding sources are served their stored text, i.e. treated as a real, matching page.
-        fetcher = FakeFetcher({row.source_url: (200, row.source_url, f"{row.raw_title} {row.raw_text}") for row in rows})
         embed = FakeEmbed(error=AssertionError("embedding API must not be called"))
 
-        summary = gates.gate_rows(self.db, rows, embed, fetcher, deadline=float("inf"))
+        summary = gates.gate_rows(self.db, rows, embed, deadline=float("inf"))
 
         outcomes = self.conn.execute(text("select id, gate_status, gate_failures from raw_ideas where published_brief_id is not null order by id")).all()
         duplicates = [(r.id, r.gate_failures) for r in outcomes if r.gate_status == "duplicate"]

@@ -120,7 +120,7 @@ def run_pipeline(db, llm_client, embed_client, fetcher, total_budget_seconds) ->
         stage("ingest", SHARE["ingest"], lambda budget: run_ingestion(db, budget))
     stage("prefilter", SHARE["prefilter"], lambda budget: run_prefilter(db, PREFILTER_MAX_ITEMS, budget))
     stage("extract", SHARE["extract"], extract, uses_gemini=True)
-    stage("gates", SHARE["gates"], lambda budget: run_gates(db, embed_client, fetcher, GATES_MAX_ITEMS, budget), uses_gemini=True)
+    stage("gates", SHARE["gates"], lambda budget: run_gates(db, embed_client, GATES_MAX_ITEMS, budget), uses_gemini=True)
 
     buffer = stage("buffer", 0, lambda _: buffer_size(db))
     topped_up = False
@@ -134,7 +134,7 @@ def run_pipeline(db, llm_client, embed_client, fetcher, total_budget_seconds) ->
         if remaining() >= MIN_STAGE_SECONDS:
             stage("extract_again", SHARE["extract_again"], extract, uses_gemini=True)
         if remaining() >= MIN_STAGE_SECONDS:
-            stage("gates_again", 1.0, lambda budget: run_gates(db, embed_client, fetcher, GATES_MAX_ITEMS, budget), uses_gemini=True)
+            stage("gates_again", 1.0, lambda budget: run_gates(db, embed_client, GATES_MAX_ITEMS, budget), uses_gemini=True)
         buffer = stage("buffer_after_topup", 0, lambda _: buffer_size(db))
 
     buffer = buffer if isinstance(buffer, int) else None
