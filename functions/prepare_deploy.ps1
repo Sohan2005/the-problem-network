@@ -15,6 +15,7 @@ $Files = @(
     "db/queries.py",
     "ingestion/ai_ideas.py",
     "ingestion/hn_ingest.py",
+    "ingestion/search_terms.py",
     "ingestion/stackexchange_ingest.py",
     "llm/gemini.py",
     "llm/translate.py",
@@ -24,7 +25,8 @@ $Files = @(
     "pipeline/extract.py",
     "pipeline/gates.py",
     "pipeline/publish.py",
-    "pipeline/orchestrator.py"
+    "pipeline/orchestrator.py",
+    "pipeline/sweep.py"
 )
 
 if (Test-Path $TargetRoot) {
