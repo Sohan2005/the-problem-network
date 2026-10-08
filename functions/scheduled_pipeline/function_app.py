@@ -59,7 +59,12 @@ def daily_extraction_timer(myTimer: func.TimerRequest) -> None:
     Azure Function Timer Trigger for daily Step 3 extraction.
     Runs daily at 9:00 AM UTC.
     Processes HN and Stack Exchange backlog until cleared.
+    With AUTOMATION_ENABLED 'true' it does nothing: pipeline_tick handles ingestion and extraction.
     """
+    if automation_enabled():
+        logging.info('daily_extraction: automation enabled, pipeline_tick handles ingestion and extraction')
+        return
+
     if myTimer.past_due:
         logging.info('The timer is past due!')
     

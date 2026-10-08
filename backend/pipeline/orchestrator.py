@@ -22,6 +22,9 @@ from sqlalchemy import func
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db.models import PipelineRun
+from db.queries import insert_raw_ideas
+from ingestion import ai_ideas
+from llm.gemini import QuotaExhausted
 from pipeline.extract import run_extraction
 from pipeline.gates import run_gates
 from pipeline.ingest import run_ingestion, safe_error
@@ -45,10 +48,6 @@ AI_IDEAS_STAGE = "topup:ai_suggested"
 # Share of the remaining budget each stage may use.
 SHARE = {"ingest": 0.25, "prefilter": 0.05, "extract": 0.6, "gates": 0.5, "topup": 0.5, "extract_again": 0.6}
 
-# Extra supply used when the buffer is low. Each entry is called as source(db, llm_client=..., fetcher=...,
-# budget_seconds=...) and returns a summary dict; the grounding task adds the first one.
-TOPUP_SOURCES = []
-
 def buffer_size(db) -> int:
     return candidates_query(db).count()
 
@@ -70,6 +69,35 @@ def extraction_calls_today(db, now: datetime) -> int:
 def ai_idea_calls_today(db, now: datetime) -> int:
     return db.query(PipelineRun.id).filter(
         PipelineRun.stage == AI_IDEAS_STAGE, PipelineRun.started_at >= quota_day_start(now)).count()
+
+def topup_ai_ideas(db, *, llm_client, fetcher=None, budget_seconds) -> dict:
+    """One AI idea call per top-up run, at most AI_IDEA_CALLS_PER_DAY per Pacific day; logs one AI_IDEAS_STAGE run per call."""
+    now = datetime.now(timezone.utc)
+    if ai_idea_calls_today(db, now) >= AI_IDEA_CALLS_PER_DAY:
+        return {"status": "skipped", "reason": f"daily AI idea cap {AI_IDEA_CALLS_PER_DAY} reached"}
+    if budget_seconds <= 0:
+        return {"status": "skipped", "reason": "no budget"}
+    avoid_titles = ai_ideas.load_avoid_titles(db)
+    fetched, inserted, status, error, quota = 0, 0, "ok", None, False
+    try:
+        items = ai_ideas.fetch_candidates(budget_seconds=budget_seconds, max_items=ai_ideas.DEFAULT_MAX_ITEMS,
+                                          avoid_titles=avoid_titles, llm_client=llm_client, now=now)
+        fetched = len(items)
+        inserted = insert_raw_ideas(db, items)["inserted"]
+    except QuotaExhausted:
+        db.rollback()
+        status, error, quota = "warn", "quota", True
+    except Exception as e:
+        db.rollback()
+        status, error = "error", safe_error(e)
+    db.add(PipelineRun(stage=AI_IDEAS_STAGE, started_at=now, finished_at=datetime.now(timezone.utc),
+                       rows_in=fetched, rows_out=inserted, status=status, error=error))
+    db.commit()
+    return {"status": status, "error": error, "fetched": fetched, "inserted": inserted, "quota": quota}
+
+# Extra supply used when the buffer is low. Each entry is called as source(db, llm_client=..., fetcher=...,
+# budget_seconds=...) and returns a summary dict.
+TOPUP_SOURCES = [topup_ai_ideas]
 
 def _quota(result) -> bool:
     return isinstance(result, dict) and bool(result.get("quota"))

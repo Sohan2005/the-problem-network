@@ -7,7 +7,7 @@ from datetime import datetime, date, timedelta
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from llm.translate import translate_forum_idea, generate_embedding
+from llm.translate import translate_forum_idea
 from db.database import SessionLocal
 from db.models import RawIdea
 from dedup_check import check_duplicate, log_duplicate_candidate
@@ -111,7 +111,7 @@ def process_web_grounding_candidates(limit=50):
                 print(f"  [ERROR] {e}")
                 time.sleep(10)
         
-        print(f"\n=== Web Grounding Extraction Breakdown ===")
+        print("\n=== Web Grounding Extraction Breakdown ===")
         print(f"Valid: {valid_count}")
         print(f"Rescoped: {rescoped_count}")
         print(f"Rejected: {rejected_count}")
@@ -124,4 +124,5 @@ def process_web_grounding_candidates(limit=50):
         db.close()
 
 if __name__ == "__main__":
-    process_web_grounding_candidates(limit=50)
+    sys.exit("Retired: extraction now runs in the automated pipeline (backend/pipeline/orchestrator.py, "
+             "pipeline_tick timer). This script no longer processes anything.")
