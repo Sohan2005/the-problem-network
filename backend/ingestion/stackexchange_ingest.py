@@ -1,5 +1,6 @@
 import html
 import os
+import re
 import sys
 import time
 import requests
@@ -10,6 +11,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db.queries import insert_raw_ideas
+from ingestion.search_terms import intent_score
 
 # Load .env from project root (relative to this script)
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -34,9 +36,9 @@ SOFTWARERECS = {"site": "softwarerecs", "source": "stackexchange_softwarerecs", 
 
 NEED_PHRASES = ("is there an app", "is there a tool", "looking for software", "how can I automate")
 
-# Disabled: measured 2026-10 over the last 12 months with the exact NEED_PHRASES, no site reached the 50 matching
-# questions required to enable it (android 1, apple 3, superuser 4, webapps 0, money 0, askubuntu 2). Matching all
-# words loosely finds 50+ on superuser, askubuntu, android and apple, but those are mostly troubleshooting questions.
+# Measured 2026-10 over the last 12 months with only the four NEED_PHRASES, no other site reached 50 matching questions
+# (android 1, apple 3, superuser 4, webapps 0, money 0, askubuntu 2), so fetch_candidates keeps to softwarerecs. The deep
+# search (phrase_search, tag_search) covers every site in SITES with the full phrase bank and the intent score instead.
 # 'productivity' is no longer an API site (bad_parameter); webapps replaces it.
 ANDROID = {"site": "android", "source": "stackexchange_android", "host": "android.stackexchange.com", "phrases": NEED_PHRASES}
 APPLE = {"site": "apple", "source": "stackexchange_apple", "host": "apple.stackexchange.com", "phrases": NEED_PHRASES}
@@ -45,7 +47,23 @@ WEBAPPS = {"site": "webapps", "source": "stackexchange_webapps", "host": "webapp
 MONEY = {"site": "money", "source": "stackexchange_money", "host": "money.stackexchange.com", "phrases": NEED_PHRASES}
 ASKUBUNTU = {"site": "askubuntu", "source": "stackexchange_askubuntu", "host": "askubuntu.com", "phrases": NEED_PHRASES}
 
-SITES = [SOFTWARERECS]
+SITES = [SOFTWARERECS, ANDROID, APPLE, SUPERUSER, ASKUBUNTU, WEBAPPS, MONEY]
+FETCH_CANDIDATES_SITES = [SOFTWARERECS]
+
+# Deep search: /search/advanced per site and phrase (way 1) or per group of discovered tags (way 2) over a time window.
+SWEEP_PAGE_SIZE = 100
+SWEEP_MAX_PAGES = 10
+SWEEP_FILTER = "withbody"
+QUOTA_FLOOR = 1500  # stop the whole sweep when quota_remaining falls below this
+THROTTLE_ERROR_ID = 502
+MIN_STORE_SCORE = 2
+NOISE_MAX_SCORE = -6  # never stored (already implied by MIN_STORE_SCORE)
+MIN_TEXT_WORDS = 20
+TAG_SUBSTRINGS = ("recommend", "software", "app", "tool", "automat", "alternative", "plugin", "extension", "script", "workflow")
+TAGS_PAGE_SIZE = 100
+TAGS_PER_CALL = 5  # /search/advanced `tagged` is any-of: at least one listed tag is present on every result
+_HTML_TAG = re.compile(r"<[^>]+>")
+_backoff_until = {}  # API method -> time.monotonic() before which it must not be called again
 
 class _BudgetExhausted(Exception):
     pass
@@ -116,7 +134,6 @@ def _candidate(site: dict, question, matched_keyword: str, api_key, now: datetim
     if not question_id or not title or not isinstance(created, (int, float)):
         return None
     creation_date = datetime.fromtimestamp(created, timezone.utc).replace(tzinfo=None)
-    view_count = question.get("view_count") or 0
     score = question.get("score") or 0
     answer_count = question.get("answer_count") or 0
 
@@ -132,7 +149,14 @@ def _candidate(site: dict, question, matched_keyword: str, api_key, now: datetim
         # Skip if a good answer exists, or if answers could not be fetched (skip to be safe)
         if _good_answer_exists(site["site"], question_id, score, api_key) is not False:
             return None
+    return _item(site, question, title, creation_date, matched_keyword)
 
+def _item(site: dict, question: dict, title: str, creation_date: datetime, matched_keyword: str) -> dict:
+    """raw_ideas item for a question (title already unescaped, creation_date naive UTC)."""
+    question_id = question.get("question_id")
+    view_count = question.get("view_count") or 0
+    score = question.get("score") or 0
+    answer_count = question.get("answer_count") or 0
     source_url = f"https://{site['host']}/questions/{question_id}"
     owner = question.get("owner")
     raw_text = f"QUESTION: {title}\n\n"
@@ -153,7 +177,7 @@ def _candidate(site: dict, question, matched_keyword: str, api_key, now: datetim
 def fetch_candidates(*, budget_seconds, max_items, since=None) -> list:
     """
     Fetch questions that look like unmet needs (unanswered or weakly answered, 30+ days old, within the
-    rolling window) from every site in SITES, in order.
+    rolling window) from every site in FETCH_CANDIDATES_SITES, in order.
     Returns raw_ideas item dicts for insert_raw_ideas; no database access. Stops early when the
     time budget or max_items is reached and returns what it has.
     """
@@ -169,7 +193,7 @@ def fetch_candidates(*, budget_seconds, max_items, since=None) -> list:
         since_utc = since.astimezone(timezone.utc).replace(tzinfo=None) if since.tzinfo else since
 
     candidates = []
-    for site in SITES:
+    for site in FETCH_CANDIDATES_SITES:
         window_days = MAX_POST_AGE_YEARS * 365 if site["phrases"] is None else SEARCH_WINDOW_DAYS
         min_date = now - timedelta(days=window_days)
         if since_utc is not None:
@@ -209,6 +233,142 @@ def fetch_candidates(*, budget_seconds, max_items, since=None) -> list:
                 if len(candidates) >= max_items:
                     return candidates
     return candidates
+
+def clean_text(value) -> str:
+    """Question body without HTML tags and entities, whitespace collapsed."""
+    return " ".join(html.unescape(_HTML_TAG.sub(" ", value or "")).split())
+
+def three_year_window(now=None):
+    """(start_ts, end_ts) covering the last MAX_POST_AGE_YEARS, as Unix seconds."""
+    end_ts = int(now if now is not None else time.time())
+    return end_ts - MAX_POST_AGE_YEARS * 365 * 24 * 60 * 60, end_ts
+
+def _sweep_candidate(site: dict, question, matched_keyword: str, min_date: datetime):
+    """raw_ideas item for a question with buildable intent and enough text, otherwise None."""
+    if not isinstance(question, dict):
+        return None
+    title = html.unescape(question.get("title") or "")
+    created = question.get("creation_date")
+    if not question.get("question_id") or not title or not isinstance(created, (int, float)):
+        return None
+    creation_date = datetime.fromtimestamp(created, timezone.utc).replace(tzinfo=None)
+    if creation_date < min_date:
+        return None
+    text = clean_text(question.get("body"))
+    if len(text.split()) < MIN_TEXT_WORDS:
+        return None
+    score = intent_score(title, text)
+    if score <= NOISE_MAX_SCORE or score < MIN_STORE_SCORE:
+        return None
+    return _item(site, question, title, creation_date, matched_keyword)
+
+class _SweepStopped(Exception):
+    def __init__(self, reason: str, quota: bool = False):
+        super().__init__(reason)
+        self.quota = quota
+
+def _new_result() -> dict:
+    return {"status": "ok", "reason": None, "calls": 0, "seen": 0, "candidates": [], "quota_remaining": None,
+            "quota_stop": False}
+
+def _api_call(method: str, params: dict, deadline: float, get, result: dict) -> dict:
+    """One API GET honouring backoff; raises _SweepStopped on budget, backoff past the deadline, errors or throttling."""
+    wait = _backoff_until.get(method, 0) - time.monotonic()
+    if wait > 0:
+        if time.monotonic() + wait >= deadline:
+            raise _SweepStopped("backoff")
+        time.sleep(wait)
+    if time.monotonic() >= deadline:
+        raise _SweepStopped("budget")
+    result["calls"] += 1
+    try:
+        response = get(f"{BASE_URL}/{method}", params=params, timeout=REQUEST_TIMEOUT)
+        data = response.json()
+    except (requests.RequestException, ValueError) as e:
+        raise _SweepStopped(f"request failed: {type(e).__name__}")  # type only: the URL carries the API key
+    if not isinstance(data, dict):
+        raise _SweepStopped("malformed response")
+    if isinstance(data.get("backoff"), (int, float)):
+        _backoff_until[method] = time.monotonic() + data["backoff"]
+    if isinstance(data.get("quota_remaining"), int):
+        result["quota_remaining"] = data["quota_remaining"]
+    if response.status_code != 200 or data.get("error_id") is not None:
+        error_id = data.get("error_id")
+        raise _SweepStopped(f"api error {error_id} {data.get('error_name')}", quota=error_id == THROTTLE_ERROR_ID)
+    if result["quota_remaining"] is not None and result["quota_remaining"] < QUOTA_FLOOR:
+        result["quota_stop"] = True
+    return data
+
+def _search_unit(site: dict, criteria: dict, matched_keyword: str, start_ts, end_ts, budget_seconds, api_key, get) -> dict:
+    """/search/advanced over [start_ts, end_ts), newest first, following has_more for up to SWEEP_MAX_PAGES pages."""
+    get = get or requests.get
+    api_key = api_key if api_key is not None else os.getenv("STACKEXCHANGE_API_KEY")
+    default_start, default_end = three_year_window()
+    start_ts = default_start if start_ts is None else int(start_ts)
+    end_ts = default_end if end_ts is None else int(end_ts)
+    deadline = time.monotonic() + budget_seconds
+    min_date = datetime.fromtimestamp(default_start, timezone.utc).replace(tzinfo=None)
+    result, seen_urls = _new_result(), set()
+    try:
+        for page in range(1, SWEEP_MAX_PAGES + 1):
+            params = {**criteria, "site": site["site"], "fromdate": start_ts, "todate": end_ts - 1, "sort": "creation",
+                      "order": "desc", "pagesize": SWEEP_PAGE_SIZE, "page": page, "filter": SWEEP_FILTER}
+            if api_key:
+                params["key"] = api_key
+            data = _api_call("search/advanced", params, deadline, get, result)
+            questions = data.get("items") if isinstance(data.get("items"), list) else []
+            for question in questions:
+                result["seen"] += 1
+                item = _sweep_candidate(site, question, matched_keyword, min_date)
+                if item is not None and item["source_url"] not in seen_urls:
+                    seen_urls.add(item["source_url"])
+                    result["candidates"].append(item)
+            if not data.get("has_more") or not questions:
+                break
+            if result["quota_stop"]:
+                raise _SweepStopped("quota", quota=True)
+    except _SweepStopped as e:
+        result["status"], result["reason"] = "warn", str(e)
+        result["quota_stop"] = result["quota_stop"] or e.quota
+    return result
+
+def phrase_search(site: dict, phrase: str, *, budget_seconds, start_ts=None, end_ts=None, api_key=None, get=None) -> dict:
+    """
+    Way 1: questions on one site (an entry of SITES) matching the quoted phrase, window defaulting to the last
+    MAX_POST_AGE_YEARS. Keeps questions with intent_score >= MIN_STORE_SCORE and MIN_TEXT_WORDS words of body text;
+    matched_keyword = phrase. No database access. Returns {"status": "ok"|"warn", "reason", "calls", "seen",
+    "candidates", "quota_remaining", "quota_stop"}; quota_stop means the caller must stop every Stack Exchange unit.
+    """
+    return _search_unit(site, {"q": f'"{phrase}"'}, phrase, start_ts, end_ts, budget_seconds, api_key, get)
+
+def tag_search(site: dict, tags, *, budget_seconds, start_ts=None, end_ts=None, api_key=None, get=None) -> dict:
+    """Way 2: questions carrying any of the tags (at most TAGS_PER_CALL), same filters and result as phrase_search."""
+    tags = list(tags)[:TAGS_PER_CALL]
+    return _search_unit(site, {"tagged": ";".join(tags)}, "sweep:" + ";".join(tags), start_ts, end_ts, budget_seconds,
+                        api_key, get)
+
+def discover_tags(site: dict, *, budget_seconds, cache: dict, api_key=None, get=None) -> dict:
+    """
+    The site's TAGS_PAGE_SIZE most popular tags whose names contain one of TAG_SUBSTRINGS, sorted by name. One /tags call
+    per site; the result is kept in cache (one dict per sweep run). Returns the phrase_search result shape plus "tags".
+    """
+    if site["site"] in cache:
+        return {**_new_result(), "tags": cache[site["site"]]}
+    get = get or requests.get
+    api_key = api_key if api_key is not None else os.getenv("STACKEXCHANGE_API_KEY")
+    result = {**_new_result(), "tags": []}
+    params = {"site": site["site"], "order": "desc", "sort": "popular", "pagesize": TAGS_PAGE_SIZE}
+    if api_key:
+        params["key"] = api_key
+    try:
+        data = _api_call("tags", params, time.monotonic() + budget_seconds, get, result)
+    except _SweepStopped as e:
+        result["status"], result["reason"], result["quota_stop"] = "warn", str(e), result["quota_stop"] or e.quota
+        return result
+    items = data.get("items") if isinstance(data.get("items"), list) else []
+    names = {t.get("name") for t in items if isinstance(t, dict) and isinstance(t.get("name"), str)}
+    result["tags"] = cache[site["site"]] = sorted(n for n in names if any(s in n for s in TAG_SUBSTRINGS))
+    return result
 
 def fetch_softwarerecs_ideas():
     """Fetch Software Recommendations candidates and store them in raw_ideas. Returns the number of new rows."""
