@@ -1,6 +1,5 @@
 import os
 import sys
-import json
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -10,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from llm.translate import generate_embedding
 from db.database import SessionLocal
 from db.models import RawIdea, Brief
+from pipeline.publish import brief_fields, embedding_text
 
 # Load .env from project root (relative to this script)
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -43,58 +43,18 @@ def daily_publish_to_briefs(limit=10):
         
         for record in records:
             raw_id = record.id
-            source = record.source
-            source_url = record.source_url
-            raw_text = record.raw_text
-            is_valid_idea = record.is_valid_idea
-            extracted_title = record.extracted_title
-            problem_summary = record.problem_summary
-            target_user = record.target_user
-            features = record.suggested_features
-            difficulty = record.difficulty_estimate
-            tech_stack = record.suggested_tech_stack
-            learning = record.learning_outcomes
-            rescoped_version = record.rescoped_version
-            source_date = record.source_date
             
-            # Determine which fields to use (rescoped or direct)
-            if is_valid_idea == 'needs_rescope' and rescoped_version:
-                title = rescoped_version.get('title')
-                problem = rescoped_version.get('problem_summary')
-                target = rescoped_version.get('target_user')
-                features_list = rescoped_version.get('suggested_features', [])
-                diff = rescoped_version.get('difficulty_estimate')
-                tech_list = rescoped_version.get('suggested_tech_stack', [])
-                learning_list = rescoped_version.get('learning_outcomes', [])
-            else:
-                title = extracted_title
-                problem = problem_summary
-                target = target_user
-                features_list = features if features else []
-                diff = difficulty
-                tech_list = tech_stack if tech_stack else []
-                learning_list = learning if learning else []
-            
-            # Insert into briefs table
-            brief = Brief(
-                title=title,
-                difficulty=diff,
-                core_task=problem,
-                recommended_stack=tech_list,  # Now JSON type, not string
-                target_user=target,
-                suggested_features=features_list,
-                learning_outcomes=learning_list,
-                raw_idea_id=record.id,  # Link back to RawIdea source
-                created_at=datetime.utcnow(),
-                source_date=source_date
-            )
+            # Insert into briefs table (rescoped fields for needs_rescope, extracted fields otherwise)
+            fields = brief_fields(record)
+            title = fields["title"]
+            brief = Brief(**fields, created_at=datetime.utcnow())
             db.add(brief)
             db.flush()  # Get the ID without committing
             
             brief_id = brief.id
             
             # Generate embedding for dedup (Step 5)
-            combined_text = f"{title} {problem}"
+            combined_text = embedding_text(fields)
             embedding = generate_embedding(combined_text)
             embedding_str = f"[{','.join(map(str, embedding))}]"
             
@@ -115,7 +75,7 @@ def daily_publish_to_briefs(limit=10):
             promoted_count += 1
         
         db.commit()
-        print(f"\n=== Daily Publish Complete ===")
+        print("\n=== Daily Publish Complete ===")
         print(f"Promoted {promoted_count} briefs to live table")
         
         # Check remaining ready_to_publish count

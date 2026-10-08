@@ -19,7 +19,8 @@ $Files = @(
     "pipeline/__init__.py",
     "pipeline/ingest.py",
     "pipeline/prefilter.py",
-    "pipeline/extract.py"
+    "pipeline/extract.py",
+    "pipeline/publish.py"
 )
 
 if (Test-Path $TargetRoot) {
