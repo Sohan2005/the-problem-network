@@ -1,9 +1,10 @@
 """
 Step 6 publish: move the best gate-passed ideas into briefs, once per UTC day.
 
-Daily rules: TARGET briefs per day. With fewer available, everything available is published (never zero while
-anything passed); the publish_days note says whether that was a flexible-day shortfall (Wed/Sat/Sun with at least
-FLEX_MINIMUM available) or a SHORTFALL. Everything happens in one transaction; the publish_days primary key makes a
+Daily rules: DAILY_TARGET (5) briefs per day. With fewer available, everything available is published (never zero
+while anything passed); the publish_days note says whether that was a flexible-day shortfall (Wed/Sat/Sun with at
+least FLEX_MIN (3) available) or a SHORTFALL. A buffer below BUFFER_TARGET (15) passed, unpublished briefs is
+reported. Everything happens in one transaction; the publish_days primary key makes a
 second run for the same day a no-op, and briefs.raw_idea_id is unique, so overlapping runs cannot double-publish.
 
 Real-sourced candidates (fetched posts) are chosen first by gate score; the remainder is filled with AI_SOURCES rows,
@@ -31,10 +32,10 @@ from pipeline.ingest import safe_error
 
 STAGE = "publish"
 QUOTA_NOTE = "quota"
-TARGET = 10
-FLEX_MINIMUM = 5
+DAILY_TARGET = 5
+FLEX_MIN = 3
 FLEXIBLE_WEEKDAYS = (2, 5, 6)  # Wednesday, Saturday, Sunday
-BUFFER_LOW = 30
+BUFFER_TARGET = 15
 VALID_IDEA = ("true", "needs_rescope")
 AI_SOURCES = ("ai_suggested", "web_grounding")  # no fetched post behind them
 AI_MAX_PER_DAY = 2
@@ -104,9 +105,9 @@ def is_flexible_day(day) -> bool:
 def day_note(published: int, available: int, flexible: bool) -> str:
     if published == 0:
         return "EMPTY - supply failure"
-    if published >= TARGET:
+    if published >= DAILY_TARGET:
         return "ok"
-    if flexible and available >= FLEX_MINIMUM:
+    if flexible and available >= FLEX_MIN:
         return "flexible-day shortfall"
     return "SHORTFALL"
 
@@ -117,7 +118,7 @@ def _log_run(db, started_at, rows_in, rows_out, status, error=None):
 
 def run_publish(db, embed_client, today=None) -> dict:
     """
-    Publish up to TARGET briefs for `today` (default: current UTC date). Returns a summary; status 'skipped' when
+    Publish up to DAILY_TARGET briefs for `today` (default: current UTC date). Returns a summary; status 'skipped' when
     the day already has a publish_days row. On error everything is rolled back, logged and re-raised.
     """
     started_at = datetime.now(timezone.utc)
@@ -132,7 +133,7 @@ def run_publish(db, embed_client, today=None) -> dict:
         candidates = candidates_query(db).all()
         rows_in = len(candidates)
         available = len(choose(candidates, len(candidates)))
-        chosen = choose(candidates, TARGET)
+        chosen = choose(candidates, DAILY_TARGET)
         published_at = datetime.now(timezone.utc)
         brief_ids = []
         for record in chosen:
@@ -156,10 +157,10 @@ def run_publish(db, embed_client, today=None) -> dict:
             _log_run(db, started_at, rows_in, 0, "warn", QUOTA_NOTE)
             return {"status": "warn", "day": today.isoformat(), "published": 0, "brief_ids": [], "quota": True,
                     "is_flexible_day": flexible, "buffer_before": rows_in, "buffer_after": rows_in, "note": QUOTA_NOTE,
-                    "buffer_low": rows_in < BUFFER_LOW}
+                    "buffer_low": rows_in < BUFFER_TARGET}
         published = len(brief_ids)
         note = day_note(published, available, flexible)
-        db.add(PublishDay(day=today, target=TARGET, published=published, is_flexible_day=flexible,
+        db.add(PublishDay(day=today, target=DAILY_TARGET, published=published, is_flexible_day=flexible,
                           buffer_before=rows_in, buffer_after=rows_in - published, note=note))
         db.commit()
     except Exception as e:
@@ -170,11 +171,11 @@ def run_publish(db, embed_client, today=None) -> dict:
     buffer_after = rows_in - published
     status = "ok" if note == "ok" and not quota else "warn"
     notes = ([QUOTA_NOTE] if quota else []) + ([] if note == "ok" else [note])
-    if buffer_after < BUFFER_LOW:
-        logging.warning("publish: buffer low (%d passed, unpublished briefs; target %d)", buffer_after, BUFFER_LOW)
-        notes.append(f"buffer low: {buffer_after} < {BUFFER_LOW}")
+    if buffer_after < BUFFER_TARGET:
+        logging.warning("publish: buffer low (%d passed, unpublished briefs; target %d)", buffer_after, BUFFER_TARGET)
+        notes.append(f"buffer low: {buffer_after} < {BUFFER_TARGET}")
     error = "; ".join(notes) or None
     _log_run(db, started_at, rows_in, published, status, error)
     return {"status": status, "day": today.isoformat(), "published": published, "brief_ids": brief_ids,
             "is_flexible_day": flexible, "buffer_before": rows_in, "buffer_after": buffer_after, "note": note,
-            "buffer_low": buffer_after < BUFFER_LOW, "quota": quota}
+            "buffer_low": buffer_after < BUFFER_TARGET, "quota": quota}

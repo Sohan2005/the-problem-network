@@ -29,15 +29,14 @@ from pipeline.extract import run_extraction
 from pipeline.gates import run_gates
 from pipeline.ingest import run_ingestion, safe_error
 from pipeline.prefilter import run_prefilter
-from pipeline.publish import candidates_query
+from pipeline.publish import BUFFER_TARGET, candidates_query
 
 STAGE = "pipeline"
 INGEST_INTERVAL = timedelta(hours=12)
 PREFILTER_MAX_ITEMS = 500
 EXTRACT_MAX_ITEMS = 40
 GATES_MAX_ITEMS = 200
-BUFFER_TARGET = 30
-BUFFER_CRITICAL = 10
+BUFFER_CRITICAL = 5  # below this the tick is logged as 'warn'; BUFFER_TARGET (15) comes from publish
 MIN_STAGE_SECONDS = 30
 
 QUOTA_TIMEZONE = ZoneInfo("America/Los_Angeles")

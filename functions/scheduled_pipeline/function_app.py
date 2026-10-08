@@ -97,7 +97,7 @@ def daily_publish_timer(myTimer: func.TimerRequest) -> None:
     Azure Function Timer Trigger for daily publishing.
     Runs daily at 10:00 AM UTC (1 hour after extraction).
     With AUTOMATION_ENABLED 'true': publishes gate-passed ideas through pipeline/publish.py.
-    Otherwise: promotes up to 10 ready_to_publish records to briefs table, as before.
+    Otherwise: promotes up to 5 ready_to_publish records to briefs table.
     """
     if myTimer.past_due:
         logging.info('The timer is past due!')
@@ -127,8 +127,8 @@ def daily_publish_timer(myTimer: func.TimerRequest) -> None:
         # Import and run publish function
         from daily_publish_to_briefs import daily_publish_to_briefs
         
-        # Publish up to 10 ready_to_publish records
-        promoted = daily_publish_to_briefs(limit=10)
+        # Publish up to 5 ready_to_publish records
+        promoted = daily_publish_to_briefs(limit=5)
         
         logging.info(f'Daily publish completed: {promoted} briefs promoted')
     
