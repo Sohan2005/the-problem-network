@@ -8,8 +8,15 @@ They lean towards passing: extraction and the gates catch what slips through.
 Loosened against the historical record (2026-10): MIN_WORDS 40 -> 20 and rule_no_intent disabled, because at
 40 words / with the intent check they rejected items later extracted as valid (shortest valid: 23 words; several
 valid Stack Exchange and HN items contain none of INTENT_SIGNALS).
+
+rule_noise rejects only obvious noise: rows whose local intent score (ingestion/search_terms.py, computed on the title
+and the HTML-free text) is NOISE_MAX_SCORE (-7) or lower. Calibrated 2026-10 on the test branch: -6 would reject one
+published brief (a legacy Show HN post, 'show hn' in the title scores -3 twice); at -7 no published or judged-valid
+row is rejected.
 """
+import html
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -18,12 +25,15 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db.models import PipelineRun, RawIdea
+from ingestion.search_terms import intent_score
 from pipeline.ingest import safe_error
 
 STAGE = "prefilter"
 COMMIT_EVERY = 100
 MIN_WORDS = 20
 MIN_WORDS_BEYOND_TRIGGER = 8
+NOISE_MAX_SCORE = -7
+_HTML_TAG = re.compile(r"<[^>]+>")
 
 INTENT_SIGNALS = [
     "idea", "build", "app", "website", "tool",
@@ -46,6 +56,12 @@ REASON_TOO_SHORT_BEYOND_TRIGGER = (
     "Too short ({words} words), insufficient context beyond trigger phrase ({beyond} words < {minimum} minimum)"
 )
 REASON_NO_INTENT = "No buildable intent signals found"
+REASON_NOISE = "Troubleshooting or promo noise"
+
+def row_intent_score(raw_title, raw_text) -> int:
+    """intent_score of a stored row, with HTML tags and entities removed from the text first."""
+    text = " ".join(html.unescape(_HTML_TAG.sub(" ", raw_text or "")).split())
+    return intent_score(raw_title or "", text)
 
 def matching_comment(raw_text: str) -> str:
     """The MATCHING COMMENT portion of comment-mode text, otherwise the whole text."""
@@ -70,7 +86,7 @@ def has_buildable_intent(raw_text: str) -> bool:
     text_lower = raw_text.lower()
     return any(signal in text_lower for signal in INTENT_SIGNALS)
 
-def rule_too_short(raw_text: str):
+def rule_too_short(raw_text: str, raw_title: str = ""):
     """Reject bodies under MIN_WORDS, unless a trigger phrase comes with MIN_WORDS_BEYOND_TRIGGER words of context."""
     body = matching_comment(raw_text)
     words = count_words(body)
@@ -84,16 +100,20 @@ def rule_too_short(raw_text: str):
         return REASON_TOO_SHORT_BEYOND_TRIGGER.format(words=words, beyond=beyond, minimum=MIN_WORDS_BEYOND_TRIGGER)
     return None
 
-def rule_no_intent(raw_text: str):
+def rule_no_intent(raw_text: str, raw_title: str = ""):
     """Reject text with none of the buildable-intent signals. Disabled: see module docstring."""
     return None if has_buildable_intent(raw_text) else REASON_NO_INTENT
 
-RULES = [rule_too_short]
+def rule_noise(raw_text: str, raw_title: str = ""):
+    """Reject rows whose intent score is NOISE_MAX_SCORE or lower."""
+    return REASON_NOISE if row_intent_score(raw_title, raw_text) <= NOISE_MAX_SCORE else None
 
-def evaluate(raw_text: str):
+RULES = [rule_too_short, rule_noise]
+
+def evaluate(raw_text: str, raw_title: str = ""):
     """Returns (passed, reason); reason is None when passed."""
     for rule in RULES:
-        reason = rule(raw_text or "")
+        reason = rule(raw_text or "", raw_title or "")
         if reason:
             return False, reason
     return True, None
@@ -121,7 +141,7 @@ def run_prefilter(db, max_items, budget_seconds) -> dict:
             if time.monotonic() >= deadline:
                 stopped_by_budget = True
                 break
-            row.passed_prefilter, row.prefilter_reject_reason = evaluate(row.raw_text)
+            row.passed_prefilter, row.prefilter_reject_reason = evaluate(row.raw_text, row.raw_title)
             batch_examined += 1
             batch_passed += row.passed_prefilter
             if batch_examined == COMMIT_EVERY:

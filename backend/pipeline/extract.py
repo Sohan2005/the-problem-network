@@ -4,6 +4,9 @@ Step 3 extraction: one synchronous LLM call per prefiltered row, using the promp
 Each row gets at most MAX_ATTEMPTS calls: extraction_attempts is incremented and committed before the call,
 so a crash mid-call still counts. Gate, ready and published columns are never touched here.
 
+Rows are chosen by rank: real sources before AI_SOURCES, then the local intent score (computed on the fly from
+raw_title and raw_text, highest first), then source_date (newest first).
+
 When Gemini reports its free quota exhausted, the stage stops at once, refunds that row's attempt (it stays
 pending) and logs a 'warn' run with the note 'quota'.
 """
@@ -19,11 +22,14 @@ from db.models import PipelineRun, RawIdea
 from llm.gemini import GeminiClient as _GeminiClient, QuotaExhausted
 from llm.translate import FORUM_MODEL, build_forum_prompt, parse_forum_response
 from pipeline.ingest import ERROR_MAX, safe_error
+from pipeline.prefilter import row_intent_score
+from pipeline.publish import AI_SOURCES
 
 STAGE = "extract"
 QUOTA_NOTE = "quota"
 MAX_ATTEMPTS = 3
 CALL_INTERVAL_SECONDS = 5  # Free-tier rate limit, same pause as the old extraction scripts
+_EPOCH = datetime(1970, 1, 1)
 
 class GeminiClient(_GeminiClient):
     """Default LLM client. Anything with generate(prompt) -> str can be passed instead (tests use a fake)."""
@@ -37,6 +43,18 @@ def _eligible(query):
         RawIdea.gate_status == "pending",
         RawIdea.passed_prefilter.is_(True),
     )
+
+def rank_key(row):
+    """Sort key over (id, source, raw_title, raw_text, source_date): real sources, intent score desc, source_date desc."""
+    date = row.source_date
+    return (row.source in AI_SOURCES, -row_intent_score(row.raw_title, row.raw_text),
+            date is None, -(date - _EPOCH).total_seconds() if date is not None else 0, row.id)
+
+def ranked_ids(db, max_items) -> list:
+    """Ids of the top max_items rows of the eligible pool (fewer than MAX_ATTEMPTS attempts) by rank_key."""
+    pool = (_eligible(db.query(RawIdea.id, RawIdea.source, RawIdea.raw_title, RawIdea.raw_text, RawIdea.source_date))
+            .filter(RawIdea.extraction_attempts < MAX_ATTEMPTS).all())
+    return [row.id for row in sorted(pool, key=rank_key)[:max_items]]
 
 def _text(value):
     if isinstance(value, list):
@@ -67,7 +85,7 @@ def _apply_result(row, result: dict):
 
 def run_extraction(db, llm_client, max_items, budget_seconds) -> dict:
     """
-    Extract prefiltered, unprocessed, pending rows with fewer than MAX_ATTEMPTS attempts, oldest first.
+    Extract prefiltered, unprocessed, pending rows with fewer than MAX_ATTEMPTS attempts, best ranked first (rank_key).
     One failing row never stops the run. Logs one pipeline_runs row and returns a summary.
     """
     deadline = time.monotonic() + budget_seconds
@@ -77,12 +95,7 @@ def run_extraction(db, llm_client, max_items, budget_seconds) -> dict:
     status, error, last_item_error = "ok", None, None
     try:
         summary["exhausted"] = _eligible(db.query(RawIdea)).filter(RawIdea.extraction_attempts >= MAX_ATTEMPTS).count()
-        row_ids = [
-            row_id for (row_id,) in _eligible(db.query(RawIdea.id))
-            .filter(RawIdea.extraction_attempts < MAX_ATTEMPTS)
-            .order_by(RawIdea.fetched_at.asc().nullsfirst(), RawIdea.id.asc())
-            .limit(max_items)
-        ]
+        row_ids = ranked_ids(db, max_items)
         for index, row_id in enumerate(row_ids):
             if index and CALL_INTERVAL_SECONDS:
                 time.sleep(max(0, min(CALL_INTERVAL_SECONDS, deadline - time.monotonic())))

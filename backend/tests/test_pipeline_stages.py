@@ -119,6 +119,12 @@ class PrefilterStageTests(StageTestCase):
 
 class ExtractionStageTests(StageTestCase):
 
+    def setUp(self):
+        super().setUp()
+        # Eligible branch rows can outrank the test rows by intent score; hide them inside the rolled-back transaction.
+        self.conn.execute(text("update raw_ideas set passed_prefilter = null "
+                               "where passed_prefilter and processed_at is null and gate_status = 'pending'"))
+
     def make_eligible(self, **overrides):
         return self.make_row(passed_prefilter=True, **overrides)
 
