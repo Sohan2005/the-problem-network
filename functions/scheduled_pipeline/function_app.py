@@ -28,7 +28,7 @@ def safe_message(exc: Exception) -> str:
                    use_monitor=False)
 def pipeline_tick_timer(myTimer: func.TimerRequest) -> None:
     """
-    Every 2 hours: ingest (at most every 12 h), prefilter, extract, gate and top up within an 8-minute budget.
+    Every 2 hours: ingest (the resumable sweep ladder), prefilter, extract, gate and top up within an 8-minute budget.
     Does nothing unless AUTOMATION_ENABLED is 'true'.
     """
     if not automation_enabled():

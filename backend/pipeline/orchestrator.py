@@ -1,7 +1,9 @@
 """
-One pipeline tick: ingest (at most every 12 hours) -> prefilter -> extract -> gates, then a top-up round when the
-buffer of passed, unpublished briefs is low. Every stage runs in its own try/except so one failure never stops
-the others; each stage logs its own pipeline_runs rows and the tick logs one more with stage 'pipeline'.
+One pipeline tick: ingest -> prefilter -> extract -> gates, then a top-up round when the buffer of passed, unpublished
+briefs is low. Ingestion is the resumable search ladder in pipeline/sweep.py (incremental search, Way 1 phrase search,
+Way 2 full sweep), given at least SHARE["ingest"] (45%) of the tick budget; the AI top-up only runs after it. Every stage
+runs in its own try/except so one failure never stops the others; each stage logs its own pipeline_runs rows and the
+tick logs one more with stage 'pipeline'.
 
 Free Gemini quota (budget is $0; these caps are starting values, to be adjusted against the limits shown in
 AI Studio). Free quotas reset at midnight Pacific, so both caps count today's pipeline_runs rows on the
@@ -13,7 +15,7 @@ When a stage reports the quota exhausted, the remaining Gemini-using stages of t
 import os
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func
@@ -27,12 +29,12 @@ from ingestion import ai_ideas
 from llm.gemini import QuotaExhausted
 from pipeline.extract import run_extraction
 from pipeline.gates import run_gates
-from pipeline.ingest import run_ingestion, safe_error
+from pipeline.ingest import safe_error
 from pipeline.prefilter import run_prefilter
 from pipeline.publish import BUFFER_TARGET, candidates_query
+from pipeline.sweep import run_sweep
 
 STAGE = "pipeline"
-INGEST_INTERVAL = timedelta(hours=12)
 PREFILTER_MAX_ITEMS = 500
 EXTRACT_MAX_ITEMS = 40
 GATES_MAX_ITEMS = 200
@@ -44,18 +46,11 @@ EXTRACTION_DAILY_CAP = 80
 AI_IDEA_CALLS_PER_DAY = 3
 AI_IDEAS_STAGE = "topup:ai_suggested"
 
-# Share of the remaining budget each stage may use.
-SHARE = {"ingest": 0.25, "prefilter": 0.05, "extract": 0.6, "gates": 0.5, "topup": 0.5, "extract_again": 0.6}
+# Share of the remaining budget each stage may use (ingest runs first, so it gets 45% of the whole tick).
+SHARE = {"ingest": 0.45, "prefilter": 0.05, "extract": 0.6, "gates": 0.5, "topup": 0.5, "extract_again": 0.6}
 
 def buffer_size(db) -> int:
     return candidates_query(db).count()
-
-def ingested_recently(db, now: datetime) -> bool:
-    return db.query(PipelineRun.id).filter(
-        PipelineRun.stage.like("ingest:%"),
-        PipelineRun.status == "ok",
-        PipelineRun.started_at >= now - INGEST_INTERVAL,
-    ).first() is not None
 
 def quota_day_start(now: datetime) -> datetime:
     """Start of the current America/Los_Angeles calendar day, when the free Gemini quotas reset."""
@@ -141,10 +136,7 @@ def run_pipeline(db, llm_client, embed_client, fetcher, total_budget_seconds) ->
             return {"status": "skipped", "reason": f"daily extraction cap {EXTRACTION_DAILY_CAP} reached"}
         return run_extraction(db, llm_client, min(EXTRACT_MAX_ITEMS, allowed), budget)
 
-    if ingested_recently(db, started_at):
-        stages["ingest"] = {"status": "skipped", "reason": "ingested within the last 12 hours"}
-    else:
-        stage("ingest", SHARE["ingest"], lambda budget: run_ingestion(db, budget))
+    stage("ingest", SHARE["ingest"], lambda budget: run_sweep(db, budget))
     stage("prefilter", SHARE["prefilter"], lambda budget: run_prefilter(db, PREFILTER_MAX_ITEMS, budget))
     stage("extract", SHARE["extract"], extract, uses_gemini=True)
     stage("gates", SHARE["gates"], lambda budget: run_gates(db, embed_client, GATES_MAX_ITEMS, budget), uses_gemini=True)
