@@ -13,6 +13,44 @@ if backend_path not in sys.path:
 
 app = func.FunctionApp()
 
+PIPELINE_BUDGET_SECONDS = 8 * 60
+
+def automation_enabled() -> bool:
+    """The automated pipeline runs only when AUTOMATION_ENABLED is exactly 'true'."""
+    return os.getenv("AUTOMATION_ENABLED") == "true"
+
+def safe_message(exc: Exception) -> str:
+    from pipeline.ingest import safe_error
+    return safe_error(exc)
+
+@app.function_name(name="pipeline_tick")
+@app.timer_trigger(schedule="0 0 */2 * * *", arg_name="myTimer", run_on_startup=False,
+                   use_monitor=False)
+def pipeline_tick_timer(myTimer: func.TimerRequest) -> None:
+    """
+    Every 2 hours: ingest (at most every 12 h), prefilter, extract, gate and top up within an 8-minute budget.
+    Does nothing unless AUTOMATION_ENABLED is 'true'.
+    """
+    if not automation_enabled():
+        logging.info('automation disabled')
+        return
+
+    from db.database import SessionLocal
+    from pipeline.extract import GeminiClient
+    from pipeline.gates import GeminiEmbedClient, RequestsFetcher
+    from pipeline.orchestrator import run_pipeline
+
+    db = SessionLocal()
+    try:
+        summary = run_pipeline(db, GeminiClient(), GeminiEmbedClient(), RequestsFetcher(), PIPELINE_BUDGET_SECONDS)
+        logging.info(f"Pipeline tick finished: status={summary['status']} buffer={summary['buffer']} "
+                     f"failed_stages={summary['failed_stages']} note={summary['error']}")
+    except Exception as e:
+        logging.error(f'Pipeline tick failed: {safe_message(e)}')
+        raise
+    finally:
+        db.close()
+
 @app.function_name(name="daily_extraction")
 @app.timer_trigger(schedule="0 0 9 * * *", arg_name="myTimer", run_on_startup=False,
                    use_monitor=False) 
@@ -53,11 +91,31 @@ def daily_publish_timer(myTimer: func.TimerRequest) -> None:
     """
     Azure Function Timer Trigger for daily publishing.
     Runs daily at 10:00 AM UTC (1 hour after extraction).
-    Promotes up to 10 ready_to_publish records to briefs table.
+    With AUTOMATION_ENABLED 'true': publishes gate-passed ideas through pipeline/publish.py.
+    Otherwise: promotes up to 10 ready_to_publish records to briefs table, as before.
     """
     if myTimer.past_due:
         logging.info('The timer is past due!')
     
+    if automation_enabled():
+        logging.info('Starting automated publish...')
+        from db.database import SessionLocal
+        from pipeline.gates import GeminiEmbedClient
+        from pipeline.publish import run_publish
+
+        db = SessionLocal()
+        try:
+            summary = run_publish(db, GeminiEmbedClient())
+            logging.info(f"Automated publish finished: status={summary['status']} day={summary['day']} "
+                         f"published={summary['published']} note={summary.get('note')} "
+                         f"buffer_after={summary.get('buffer_after')}")
+        except Exception as e:
+            logging.error(f'Automated publish failed: {safe_message(e)}')
+            raise
+        finally:
+            db.close()
+        return
+
     logging.info('Starting daily publish...')
     
     try:
