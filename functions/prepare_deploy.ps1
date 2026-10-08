@@ -17,7 +17,9 @@ $Files = @(
     "ingestion/stackexchange_ingest.py",
     "llm/translate.py",
     "pipeline/__init__.py",
-    "pipeline/ingest.py"
+    "pipeline/ingest.py",
+    "pipeline/prefilter.py",
+    "pipeline/extract.py"
 )
 
 if (Test-Path $TargetRoot) {
