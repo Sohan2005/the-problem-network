@@ -211,10 +211,10 @@ class GroundingGateTests(unittest.TestCase):
 
     def test_web_grounding_checked_against_raw_text_only(self):
         self.assertTrue(self.grounding("web_grounding")[0])
-        passed, reason, _ = self.grounding("web_grounding", raw_text="nothing shared")
+        passed, reason, _ = self.grounding("web_grounding", raw_text="completely unrelated words here")
         self.assertFalse(passed)
         self.assertEqual(reason, "low_source_overlap: 0.00 < 0.20")
-        self.assertTrue(self.grounding("ai_suggested", raw_text="nothing shared")[0])
+        self.assertTrue(self.grounding("ai_suggested", raw_text="completely unrelated words here")[0])
 
     def test_html_to_text(self):
         self.assertEqual(gates.html_to_text("<script>x=1</script><p>Tom &amp; Jerry</p>").split(), ["Tom", "&", "Jerry"])
