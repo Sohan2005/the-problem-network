@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getFavorites, toggleFavorite, isFavorite } from "@/lib/favorites";
 import Comments from "@/components/Comments";
+import TitleMark from "@/components/TitleMark";
 
 export default function BriefDetailPage() {
   const params = useParams();
@@ -104,7 +105,10 @@ export default function BriefDetailPage() {
       <main className="max-w-[720px] mx-auto px-4 py-6">
         {/* Title and Favorite */}
         <div className="flex items-start justify-between mb-4">
-          <h1 className="text-h1 font-bold text-text">{brief.title}</h1>
+          <h1 className="text-h1 font-bold text-text">
+            {brief.title}
+            {brief.has_title_mark && <TitleMark />}
+          </h1>
           <Button
             variant="ghost"
             onClick={handleFavorite}

@@ -6,6 +6,7 @@ import { Brief } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import TitleMark from "@/components/TitleMark";
 import { getFavorites, toggleFavorite, isFavorite } from "@/lib/favorites";
 
 interface BriefCardProps {
@@ -32,6 +33,7 @@ export default function BriefCard({ brief, onFavoriteChange }: BriefCardProps) {
         {/* Title */}
         <h3 className="text-h3 font-bold text-text mb-2 hover:text-accent transition-colors">
           {brief.title}
+          {brief.has_title_mark && <TitleMark />}
         </h3>
 
         {/* Difficulty */}

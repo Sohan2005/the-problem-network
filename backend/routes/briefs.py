@@ -6,8 +6,9 @@ from db.queries import create_problem, create_brief, get_or_create_tag, attach_t
 from ingestion.github_ingest import fetch_good_first_issues
 from ingestion.devpost_ingest import fetch_hackathon_challenges
 from ingestion.blog_ingest import fetch_multiple_blog_posts
+from db.models import Brief, RawIdea
 from llm.translate import translate_issue_to_brief
-from pipeline.publish import source_link
+from pipeline.publish import AI_SOURCES, source_link
 
 router = APIRouter(prefix="/briefs")
 
@@ -19,6 +20,10 @@ def get_stats(db: Session = Depends(get_db)):
 @router.get("/")
 def get_briefs(difficulty: Optional[str] = Query(None), tag: Optional[str] = Query(None), search: Optional[str] = Query(None), sort: Optional[str] = Query(None), db: Session = Depends(get_db)):
     briefs = list_briefs(db, difficulty=difficulty, tag=tag, search=search, sort=sort)
+    marked = {
+        brief_id for (brief_id,) in db.query(Brief.id).join(RawIdea, RawIdea.id == Brief.raw_idea_id)
+        .filter(RawIdea.source.in_(AI_SOURCES), Brief.id.in_([b.id for b in briefs]))
+    } if briefs else set()
     return [
         {
             "id": b.id,
@@ -27,6 +32,7 @@ def get_briefs(difficulty: Optional[str] = Query(None), tag: Optional[str] = Que
             "core_task": b.core_task,
             "recommended_stack": b.recommended_stack,
             "tags": [t.name for t in b.tags],
+            "has_title_mark": b.id in marked,
         }
         for b in briefs
     ]
@@ -51,6 +57,7 @@ def get_brief(brief_id: int, db: Session = Depends(get_db)):
         "tags": [t.name for t in brief.tags],
         "source_url": source_link(source.source, source.source_url) if source else None,
         "source_platform": source.source if source else None,
+        "has_title_mark": brief.raw_idea is not None and brief.raw_idea.source in AI_SOURCES,
     }
 
 @router.post("/ingest/{repo:path}")

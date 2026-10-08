@@ -7,6 +7,7 @@ export interface Brief {
   core_task: string;
   recommended_stack: string[] | null;
   tags: string[];
+  has_title_mark?: boolean;
 }
 
 export interface BriefDetail extends Brief {
