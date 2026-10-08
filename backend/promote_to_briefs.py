@@ -1,5 +1,9 @@
-import os
 import sys
+
+sys.exit("promote_to_briefs.py is retired and must not be run: briefs are published by pipeline/publish.py "
+         "(run_publish, called from the daily_publish timer).")
+
+import os
 import json
 from dotenv import load_dotenv
 import psycopg2
