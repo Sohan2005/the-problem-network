@@ -5,4 +5,5 @@ google-generativeai
 requests
 SQLAlchemy>=2.0,<2.1
 pgvector
+numpy
 google-genai

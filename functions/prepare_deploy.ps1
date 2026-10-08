@@ -20,7 +20,9 @@ $Files = @(
     "pipeline/ingest.py",
     "pipeline/prefilter.py",
     "pipeline/extract.py",
-    "pipeline/publish.py"
+    "pipeline/gates.py",
+    "pipeline/publish.py",
+    "pipeline/orchestrator.py"
 )
 
 if (Test-Path $TargetRoot) {
