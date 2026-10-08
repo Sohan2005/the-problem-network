@@ -3,7 +3,6 @@ import sys
 import json
 from datetime import datetime
 from dotenv import load_dotenv
-import google.generativeai as genai
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -15,9 +14,7 @@ load_dotenv(env_path)
 
 from db.database import SessionLocal
 from db.queries import insert_raw_ideas
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=GEMINI_API_KEY)
+from llm.gemini import GeminiClient
 
 # Rotating general prompts for web grounding
 GROUNDING_PROMPTS = [
@@ -45,8 +42,7 @@ def fetch_grounding_ideas(prompt_index=0, max_ideas_per_prompt=10):
     """
     prompt = GROUNDING_PROMPTS[prompt_index % len(GROUNDING_PROMPTS)]
     
-    # Configure model with search grounding
-    model = genai.GenerativeModel("gemini-3.5-flash-lite")
+    model = GeminiClient("gemini-3.5-flash-lite", generation_config={"temperature": 0.7, "top_p": 0.8, "top_k": 40})
     
     system_prompt = """You are searching the web for app/software idea requests. Use Google Search to find what problems people complain about not having good solutions for.
 
@@ -82,17 +78,7 @@ Return ONLY valid JSON in this exact shape:
 Do not include any markdown, explanations, or text outside the JSON."""
     
     try:
-        # Use generate_content with search grounding enabled
-        response = model.generate_content(
-            system_prompt + "\n\n" + prompt,
-            generation_config=genai.types.GenerationConfig(
-                temperature=0.7,
-                top_p=0.8,
-                top_k=40
-            )
-        )
-        
-        response_text = response.text.strip()
+        response_text = model.generate(system_prompt + "\n\n" + prompt).strip()
         
         # Clean up JSON response
         if response_text.startswith("```json"):
@@ -185,7 +171,7 @@ def run_grounding_ingestion(num_prompts=5, max_ideas_per_prompt=10):
             import time
             time.sleep(2)
     
-    print(f"\n=== Web Grounding Ingestion Complete ===")
+    print("\n=== Web Grounding Ingestion Complete ===")
     print(f"Total stored: {total_stored}")
     print(f"Total skipped: {total_skipped}")
     print(f"Total queries used: {num_prompts}")

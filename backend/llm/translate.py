@@ -1,28 +1,13 @@
-import os
 import json
-from dotenv import load_dotenv
-import google.generativeai as genai
-from google import genai as new_genai
-from google.genai import types
 
-load_dotenv()
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-genai.configure(api_key=GEMINI_API_KEY)
+from llm.gemini import GeminiClient
 
 def generate_embedding(text):
-    """Generate embedding for text using new google-genai SDK with gemini-embedding-001"""
-    client = new_genai.Client(api_key=GEMINI_API_KEY)
-    result = client.models.embed_content(
-        model="gemini-embedding-001",
-        contents=text,
-        config=types.EmbedContentConfig(output_dimensionality=3072)
-    )
-    # New SDK returns list of ContentEmbedding objects, each with values attribute
-    return result.embeddings[0].values
+    """Generate embedding for text with gemini-embedding-001 (3072 dimensions)"""
+    return GeminiClient().embed(text)
 
 def translate_issue_to_brief(title, body, source_url):
-    model = genai.GenerativeModel("gemini-3.5-flash-lite")
+    model = GeminiClient("gemini-3.5-flash-lite")
     
     system_prompt = """You are a technical problem translator. Convert GitHub issues into structured briefs for junior developers.
 Return ONLY valid JSON in this exact shape:
@@ -41,8 +26,7 @@ Source URL: {source_url}
 
 Convert this issue into a brief following the system instructions."""
     
-    response = model.generate_content(system_prompt + "\n\n" + prompt)
-    response_text = response.text.strip()
+    response_text = model.generate(system_prompt + "\n\n" + prompt).strip()
     
     if response_text.startswith("```json"):
         response_text = response_text[7:]
@@ -192,6 +176,5 @@ def parse_forum_response(response_text):
 
 def translate_forum_idea(raw_text, source_url, source_platform):
     """Extract structured idea from forum post with rejection gate and rescope option"""
-    model = genai.GenerativeModel(FORUM_MODEL)
-    response = model.generate_content(build_forum_prompt(raw_text, source_url, source_platform))
-    return parse_forum_response(response.text)
+    model = GeminiClient(FORUM_MODEL)
+    return parse_forum_response(model.generate(build_forum_prompt(raw_text, source_url, source_platform)))

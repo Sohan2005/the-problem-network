@@ -325,8 +325,8 @@ class GeminiEmbedClient:
     """Default embedding client (gemini-embedding-001, 3072 dims, same as briefs). Tests inject a fake."""
 
     def embed(self, text: str):
-        from llm.translate import generate_embedding
-        return list(generate_embedding(text))
+        from llm.gemini import GeminiClient
+        return GeminiClient().embed(text)
 
 class RequestsFetcher:
     """Default fetcher: fetch(url, timeout) -> (status, final_url, page_text). Tests inject a fake."""

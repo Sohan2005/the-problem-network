@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db.models import PipelineRun, RawIdea
+from llm.gemini import GeminiClient as _GeminiClient
 from llm.translate import FORUM_MODEL, build_forum_prompt, parse_forum_response
 from pipeline.ingest import ERROR_MAX, safe_error
 
@@ -20,17 +21,11 @@ STAGE = "extract"
 MAX_ATTEMPTS = 3
 CALL_INTERVAL_SECONDS = 5  # Free-tier rate limit, same pause as the old extraction scripts
 
-class GeminiClient:
+class GeminiClient(_GeminiClient):
     """Default LLM client. Anything with generate(prompt) -> str can be passed instead (tests use a fake)."""
 
     def __init__(self, model_name: str = FORUM_MODEL, timeout_seconds: int = 60):
-        self.model_name = model_name
-        self.timeout_seconds = timeout_seconds
-
-    def generate(self, prompt: str) -> str:
-        from llm.translate import genai
-        model = genai.GenerativeModel(self.model_name)
-        return model.generate_content(prompt, request_options={"timeout": self.timeout_seconds}).text
+        super().__init__(model_name=model_name, timeout_seconds=timeout_seconds)
 
 def _eligible(query):
     return query.filter(
