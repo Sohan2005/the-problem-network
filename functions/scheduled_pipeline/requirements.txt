@@ -6,3 +6,4 @@ SQLAlchemy>=2.0,<2.1
 pgvector
 numpy
 google-genai>=1.66,<2
+tzdata

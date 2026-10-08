@@ -3,6 +3,9 @@ Step 3 extraction: one synchronous LLM call per prefiltered row, using the promp
 
 Each row gets at most MAX_ATTEMPTS calls: extraction_attempts is incremented and committed before the call,
 so a crash mid-call still counts. Gate, ready and published columns are never touched here.
+
+When Gemini reports its free quota exhausted, the stage stops at once, refunds that row's attempt (it stays
+pending) and logs a 'warn' run with the note 'quota'.
 """
 import os
 import sys
@@ -13,11 +16,12 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db.models import PipelineRun, RawIdea
-from llm.gemini import GeminiClient as _GeminiClient
+from llm.gemini import GeminiClient as _GeminiClient, QuotaExhausted
 from llm.translate import FORUM_MODEL, build_forum_prompt, parse_forum_response
 from pipeline.ingest import ERROR_MAX, safe_error
 
 STAGE = "extract"
+QUOTA_NOTE = "quota"
 MAX_ATTEMPTS = 3
 CALL_INTERVAL_SECONDS = 5  # Free-tier rate limit, same pause as the old extraction scripts
 
@@ -69,7 +73,7 @@ def run_extraction(db, llm_client, max_items, budget_seconds) -> dict:
     deadline = time.monotonic() + budget_seconds
     started_at = datetime.now(timezone.utc)
     summary = {"attempted": 0, "succeeded": 0, "failed": 0, "gave_up": 0, "valid": 0, "needs_rescope": 0,
-               "rejected": 0, "exhausted": 0, "stopped_by_budget": False}
+               "rejected": 0, "exhausted": 0, "stopped_by_budget": False, "quota": False}
     status, error, last_item_error = "ok", None, None
     try:
         summary["exhausted"] = _eligible(db.query(RawIdea)).filter(RawIdea.extraction_attempts >= MAX_ATTEMPTS).count()
@@ -93,6 +97,14 @@ def run_extraction(db, llm_client, max_items, budget_seconds) -> dict:
                 prompt = build_forum_prompt(row.raw_text, row.source_url, row.source)
                 _apply_result(row, parse_forum_response(llm_client.generate(prompt)))
                 db.commit()
+            except QuotaExhausted:
+                db.rollback()
+                row = db.get(RawIdea, row_id)
+                row.extraction_attempts = max(0, row.extraction_attempts - 1)
+                db.commit()
+                summary["attempted"] -= 1
+                summary["quota"] = True
+                break
             except Exception as e:
                 db.rollback()
                 last_item_error = safe_error(e)
@@ -110,6 +122,8 @@ def run_extraction(db, llm_client, max_items, budget_seconds) -> dict:
 
     if error is None and summary["failed"]:
         error = f"{summary['failed']} item(s) failed; last: {last_item_error}"[:ERROR_MAX]
+    if status == "ok" and summary["quota"]:
+        status, error = "warn", QUOTA_NOTE if error is None else f"{QUOTA_NOTE}; {error}"[:ERROR_MAX]
     db.add(PipelineRun(stage=STAGE, started_at=started_at, finished_at=datetime.now(timezone.utc),
                        rows_in=summary["attempted"], rows_out=summary["succeeded"], status=status, error=error))
     db.commit()

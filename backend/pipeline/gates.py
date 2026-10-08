@@ -5,6 +5,8 @@ Order: eligibility -> structure -> source red flags -> source grounding -> dupli
 Every gate function is pure and returns (passed, reason, score_part). A reason is "code: detail", several
 problems from one gate are joined with "; ". Writes only gate_status, gate_failures, gate_score, gated_at,
 duplicate_of_brief_id and (when empty) the row's embedding; never ready_to_publish or published_* columns.
+When Gemini reports its free quota exhausted, embedding stops at once, undecided rows stay pending and the run
+is logged as 'warn' with the note 'quota'.
 
 Thresholds are calibrated (2026-10) on the 49 published briefs so all of them pass:
 - structure ranges: published title 19-64 chars, problem_summary 85-278, target_user 22-155, features 2-5,
@@ -42,9 +44,11 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db.models import Brief, PipelineRun, RawIdea
+from llm.gemini import QuotaExhausted
 from pipeline.ingest import safe_error
 
 STAGE = "gates"
+QUOTA_NOTE = "quota"
 COMMIT_EVERY = 50
 
 VALID_IDEA = ("true", "needs_rescope")
@@ -347,7 +351,7 @@ class _Run:
     def __init__(self, db, deadline):
         self.db, self.deadline, self.written = db, deadline, 0
         self.summary = {"rejected_by_extraction": 0, "examined": 0, "passed": 0, "failed": 0, "duplicate": 0,
-                        "deferred": 0, "stopped_by_budget": False, "failure_reasons": {}}
+                        "deferred": 0, "stopped_by_budget": False, "quota": False, "failure_reasons": {}}
 
     def out_of_time(self):
         if time.monotonic() >= self.deadline:
@@ -391,6 +395,9 @@ def gate_rows(db, rows, embed_client, fetcher, deadline, now=None, run=None) -> 
         if vector is None:
             try:
                 vector = embed_client.embed(brief_text(fields))
+            except QuotaExhausted:
+                run.summary["quota"] = True
+                break
             except Exception:
                 run.summary["deferred"] += 1
                 continue
@@ -433,6 +440,8 @@ def run_gates(db, embed_client, fetcher, max_items, budget_seconds) -> dict:
         status, error = "error", safe_error(e)
 
     summary = run.summary
+    if status == "ok" and summary["quota"]:
+        status, error = "warn", QUOTA_NOTE
     db.add(PipelineRun(stage=STAGE, started_at=started_at, finished_at=datetime.now(timezone.utc),
                        rows_in=summary["rejected_by_extraction"] + summary["examined"], rows_out=summary["passed"],
                        status=status, error=error))

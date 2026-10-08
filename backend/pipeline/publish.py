@@ -5,6 +5,11 @@ Daily rules: TARGET briefs per day. With fewer available, everything available i
 anything passed); the publish_days note says whether that was a flexible-day shortfall (Wed/Sat/Sun with at least
 FLEX_MINIMUM available) or a SHORTFALL. Everything happens in one transaction; the publish_days primary key makes a
 second run for the same day a no-op, and briefs.raw_idea_id is unique, so overlapping runs cannot double-publish.
+
+Gate-passed rows normally carry their embedding. If one has to be embedded and Gemini reports its free quota
+exhausted, choosing stops at that row (it stays unpublished): the briefs built so far are published, or, when none
+were, nothing is written and no publish_days row is added, so a later run can still publish the day. Either way
+the run is logged as 'warn' with the note 'quota'.
 """
 import logging
 import os
@@ -17,9 +22,11 @@ from sqlalchemy import exists
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from db.models import Brief, PipelineRun, PublishDay, RawIdea
+from llm.gemini import QuotaExhausted
 from pipeline.ingest import safe_error
 
 STAGE = "publish"
+QUOTA_NOTE = "quota"
 TARGET = 10
 FLEX_MINIMUM = 5
 FLEXIBLE_WEEKDAYS = (2, 5, 6)  # Wednesday, Saturday, Sunday
@@ -102,6 +109,7 @@ def run_publish(db, embed_client, today=None) -> dict:
 
     flexible = is_flexible_day(today)
     rows_in = 0
+    quota = False
     try:
         candidates = candidates_query(db).all()
         rows_in = len(candidates)
@@ -112,7 +120,11 @@ def run_publish(db, embed_client, today=None) -> dict:
             fields = brief_fields(record)
             vector = record.embedding
             if vector is None:
-                vector = embed_client.embed(embedding_text(fields))
+                try:
+                    vector = embed_client.embed(embedding_text(fields))
+                except QuotaExhausted:
+                    quota = True
+                    break
             brief = Brief(**fields, created_at=published_at.replace(tzinfo=None), embedding=list(vector))
             db.add(brief)
             db.flush()
@@ -120,22 +132,30 @@ def run_publish(db, embed_client, today=None) -> dict:
             record.published_at = published_at
             record.ready_to_publish = False
             brief_ids.append(brief.id)
-        note = day_note(len(chosen), rows_in, flexible)
-        db.add(PublishDay(day=today, target=TARGET, published=len(chosen), is_flexible_day=flexible,
-                          buffer_before=rows_in, buffer_after=rows_in - len(chosen), note=note))
+        if quota and not brief_ids:
+            db.rollback()
+            _log_run(db, started_at, rows_in, 0, "warn", QUOTA_NOTE)
+            return {"status": "warn", "day": today.isoformat(), "published": 0, "brief_ids": [], "quota": True,
+                    "is_flexible_day": flexible, "buffer_before": rows_in, "buffer_after": rows_in, "note": QUOTA_NOTE,
+                    "buffer_low": rows_in < BUFFER_LOW}
+        published = len(brief_ids)
+        note = day_note(published, rows_in, flexible)
+        db.add(PublishDay(day=today, target=TARGET, published=published, is_flexible_day=flexible,
+                          buffer_before=rows_in, buffer_after=rows_in - published, note=note))
         db.commit()
     except Exception as e:
         db.rollback()
         _log_run(db, started_at, rows_in, 0, "error", safe_error(e))
         raise
 
-    buffer_after = rows_in - len(chosen)
-    status = "ok" if note == "ok" else "warn"
-    error = None if note == "ok" else note
+    buffer_after = rows_in - published
+    status = "ok" if note == "ok" and not quota else "warn"
+    notes = ([QUOTA_NOTE] if quota else []) + ([] if note == "ok" else [note])
     if buffer_after < BUFFER_LOW:
         logging.warning("publish: buffer low (%d passed, unpublished briefs; target %d)", buffer_after, BUFFER_LOW)
-        error = f"{error + '; ' if error else ''}buffer low: {buffer_after} < {BUFFER_LOW}"
-    _log_run(db, started_at, rows_in, len(chosen), status, error)
-    return {"status": status, "day": today.isoformat(), "published": len(chosen), "brief_ids": brief_ids,
+        notes.append(f"buffer low: {buffer_after} < {BUFFER_LOW}")
+    error = "; ".join(notes) or None
+    _log_run(db, started_at, rows_in, published, status, error)
+    return {"status": status, "day": today.isoformat(), "published": published, "brief_ids": brief_ids,
             "is_flexible_day": flexible, "buffer_before": rows_in, "buffer_after": buffer_after, "note": note,
-            "buffer_low": buffer_after < BUFFER_LOW}
+            "buffer_low": buffer_after < BUFFER_LOW, "quota": quota}
