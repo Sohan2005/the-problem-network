@@ -8,8 +8,10 @@ ingestion stage walks the ladder below in order and runs the units that are due,
 1. Incremental: the newest INCREMENTAL_DAYS (14) days, searched with the INCREMENTAL_PHRASES (40) strongest phrases
    (Hacker News, and every Stack Exchange site). Each of these units runs at most once every INCREMENTAL_EVERY_HOURS (6).
 2. Way 1, phrase search, strongest phrases first: Hacker News searches each exact phrase over the whole 3-year window
-   (one unit per phrase); Stack Exchange searches each phrase on each site in aligned 6-month windows, newest first.
-   Hacker News and Stack Exchange units alternate so both sources move forward.
+   (one unit per phrase); Stack Exchange searches each phrase on each site over the whole 3-year window too (one unit
+   per site and phrase; inside the unit the window is halved only when 10 pages still report more results).
+   Hacker News and Stack Exchange units alternate so both sources move forward. With the current phrase bank that is
+   869 Hacker News + 836 phrases x 7 sites = 5,852 Stack Exchange units, about 6,700 Way 1 units in total.
 3. Way 2, full sweep, only once every Way 1 unit has been done: every Ask HN story, one calendar month per unit; on
    Stack Exchange, the questions carrying the site's recommendation/software/tool tags, per 6-month window.
 4. Repeats: a finished unit whose window ends inside the last RECENT_WINDOW_DAYS (30) days is run again once every
@@ -148,11 +150,10 @@ def hn_way1_units(now: datetime, phrases=None, get=None) -> list:
             for p in (hn_phrases() if phrases is None else phrases)]
 
 def se_way1_units(now: datetime, phrases=None, sites=None, get=None) -> list:
-    windows = aligned_windows(now, SE_WINDOW_MONTHS)
-    return [Unit(WAY1, SE, site["site"], p, label, start_ts, end_ts, _se_phrase_run(site, p, start_ts, end_ts, get))
+    start_ts, end_ts = _ts(_window_start(now)), _ts(now)
+    return [Unit(WAY1, SE, site["site"], p, f"{WINDOW_YEARS}y", start_ts, end_ts, _se_phrase_run(site, p, start_ts, end_ts, get))
             for p in (all_phrases() if phrases is None else phrases)
-            for site in (stackexchange_ingest.SITES if sites is None else sites)
-            for label, start_ts, end_ts in windows]
+            for site in (stackexchange_ingest.SITES if sites is None else sites)]
 
 def way1_units(now: datetime, hn_get=None, se_get=None) -> list:
     return list(_interleave(hn_way1_units(now, get=hn_get), se_way1_units(now, get=se_get)))

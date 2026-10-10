@@ -51,8 +51,10 @@ SITES = [SOFTWARERECS, ANDROID, APPLE, SUPERUSER, ASKUBUNTU, WEBAPPS, MONEY]
 FETCH_CANDIDATES_SITES = [SOFTWARERECS]
 
 # Deep search: /search/advanced per site and phrase (way 1) or per group of discovered tags (way 2) over a time window.
+# Way 1 queries the whole window and halves it only when SWEEP_MAX_PAGES pages still report has_more.
 SWEEP_PAGE_SIZE = 100
 SWEEP_MAX_PAGES = 10
+MIN_SPLIT_SECONDS = 24 * 60 * 60
 SWEEP_FILTER = "withbody"
 QUOTA_FLOOR = 1500  # stop the whole sweep when quota_remaining falls below this
 THROTTLE_ERROR_ID = 502
@@ -299,8 +301,12 @@ def _api_call(method: str, params: dict, deadline: float, get, result: dict) -> 
         result["quota_stop"] = True
     return data
 
-def _search_unit(site: dict, criteria: dict, matched_keyword: str, start_ts, end_ts, budget_seconds, api_key, get) -> dict:
-    """/search/advanced over [start_ts, end_ts), newest first, following has_more for up to SWEEP_MAX_PAGES pages."""
+def _search_unit(site: dict, criteria: dict, matched_keyword: str, start_ts, end_ts, budget_seconds, api_key, get,
+                 split: bool = False) -> dict:
+    """
+    /search/advanced over [start_ts, end_ts), newest first, following has_more for up to SWEEP_MAX_PAGES pages. With
+    split, a range whose last allowed page still has more is halved (newer half first) down to MIN_SPLIT_SECONDS.
+    """
     get = get or requests.get
     api_key = api_key if api_key is not None else os.getenv("STACKEXCHANGE_API_KEY")
     default_start, default_end = three_year_window()
@@ -309,9 +315,11 @@ def _search_unit(site: dict, criteria: dict, matched_keyword: str, start_ts, end
     deadline = time.monotonic() + budget_seconds
     min_date = datetime.fromtimestamp(default_start, timezone.utc).replace(tzinfo=None)
     result, seen_urls = _new_result(), set()
-    try:
+
+    def query(start, end) -> bool:
+        """Pages [start, end); True when page SWEEP_MAX_PAGES still reported has_more."""
         for page in range(1, SWEEP_MAX_PAGES + 1):
-            params = {**criteria, "site": site["site"], "fromdate": start_ts, "todate": end_ts - 1, "sort": "creation",
+            params = {**criteria, "site": site["site"], "fromdate": start, "todate": end - 1, "sort": "creation",
                       "order": "desc", "pagesize": SWEEP_PAGE_SIZE, "page": page, "filter": SWEEP_FILTER}
             if api_key:
                 params["key"] = api_key
@@ -324,9 +332,20 @@ def _search_unit(site: dict, criteria: dict, matched_keyword: str, start_ts, end
                     seen_urls.add(item["source_url"])
                     result["candidates"].append(item)
             if not data.get("has_more") or not questions:
-                break
+                return False
             if result["quota_stop"]:
                 raise _SweepStopped("quota", quota=True)
+        return True
+
+    def walk(start, end):
+        if query(start, end) and split and end - start > MIN_SPLIT_SECONDS:
+            middle = (start + end) // 2
+            walk(middle, end)
+            walk(start, middle)
+
+    try:
+        if start_ts < end_ts:
+            walk(start_ts, end_ts)
     except _SweepStopped as e:
         result["status"], result["reason"] = "warn", str(e)
         result["quota_stop"] = result["quota_stop"] or e.quota
@@ -335,11 +354,13 @@ def _search_unit(site: dict, criteria: dict, matched_keyword: str, start_ts, end
 def phrase_search(site: dict, phrase: str, *, budget_seconds, start_ts=None, end_ts=None, api_key=None, get=None) -> dict:
     """
     Way 1: questions on one site (an entry of SITES) matching the quoted phrase, window defaulting to the last
-    MAX_POST_AGE_YEARS. Keeps questions with intent_score >= MIN_STORE_SCORE and MIN_TEXT_WORDS words of body text;
+    MAX_POST_AGE_YEARS. One query over the whole window, paged until has_more is false or SWEEP_MAX_PAGES pages are
+    read; only when the last page still has more is the window halved and each half searched the same way.
+    Keeps questions with intent_score >= MIN_STORE_SCORE and MIN_TEXT_WORDS words of body text;
     matched_keyword = phrase. No database access. Returns {"status": "ok"|"warn", "reason", "calls", "seen",
     "candidates", "quota_remaining", "quota_stop"}; quota_stop means the caller must stop every Stack Exchange unit.
     """
-    return _search_unit(site, {"q": f'"{phrase}"'}, phrase, start_ts, end_ts, budget_seconds, api_key, get)
+    return _search_unit(site, {"q": f'"{phrase}"'}, phrase, start_ts, end_ts, budget_seconds, api_key, get, split=True)
 
 def tag_search(site: dict, tags, *, budget_seconds, start_ts=None, end_ts=None, api_key=None, get=None) -> dict:
     """Way 2: questions carrying any of the tags (at most TAGS_PER_CALL), same filters and result as phrase_search."""
