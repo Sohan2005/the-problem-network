@@ -5,11 +5,13 @@ Way 2 full sweep), given at least SHARE["ingest"] (45%) of the tick budget; the 
 runs in its own try/except so one failure never stops the others; each stage logs its own pipeline_runs rows and the
 tick logs one more with stage 'pipeline'.
 
-Free Gemini quota (budget is $0; these caps are starting values, to be adjusted against the limits shown in
-AI Studio). Free quotas reset at midnight Pacific, so both caps count today's pipeline_runs rows on the
+Free Gemini quota (budget is $0): gemini-3.5-flash-lite allows 500 requests per day, gemini-embedding-001 1,000 per
+day and 100 per minute. Free quotas reset at midnight Pacific, so both caps count today's pipeline_runs rows on the
 America/Los_Angeles calendar day:
 - EXTRACTION_DAILY_CAP: extraction calls per day, the sum of rows_in of today's 'extract' runs.
 - AI_IDEA_CALLS_PER_DAY: AI idea generation calls per day, one per today's AI_IDEAS_STAGE run.
+Extraction calls are at least extract.CALL_INTERVAL_SECONDS (5) apart, so at most 12 per minute; embedding calls of the
+default client are at least gates.EMBED_INTERVAL_SECONDS (0.6) apart, so at most 100 per minute across gates and publish.
 When a stage reports the quota exhausted, the remaining Gemini-using stages of the tick are skipped.
 """
 import os
@@ -42,7 +44,7 @@ BUFFER_CRITICAL = 5  # below this the tick is logged as 'warn'; BUFFER_TARGET (1
 MIN_STAGE_SECONDS = 30
 
 QUOTA_TIMEZONE = ZoneInfo("America/Los_Angeles")
-EXTRACTION_DAILY_CAP = 80
+EXTRACTION_DAILY_CAP = 300
 AI_IDEA_CALLS_PER_DAY = 3
 AI_IDEAS_STAGE = "topup:ai_suggested"
 

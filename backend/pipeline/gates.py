@@ -37,6 +37,7 @@ import html
 import os
 import re
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
@@ -306,11 +307,23 @@ def load_pool(db) -> VectorPool:
 
 # --- clients ---
 
+EMBED_INTERVAL_SECONDS = 0.6  # free tier: at most 100 embedding requests per minute
+_embed_lock = threading.Lock()
+_last_embed_start = None
+
 class GeminiEmbedClient:
-    """Default embedding client (gemini-embedding-001, 3072 dims, same as briefs). Tests inject a fake."""
+    """
+    Default embedding client (gemini-embedding-001, 3072 dims, same as briefs). Tests inject a fake.
+    Calls start at least EMBED_INTERVAL_SECONDS apart across every instance in the process (gates and publish).
+    """
 
     def embed(self, text: str):
+        global _last_embed_start
         from llm.gemini import GeminiClient
+        with _embed_lock:
+            if _last_embed_start is not None:
+                time.sleep(max(0.0, _last_embed_start + EMBED_INTERVAL_SECONDS - time.monotonic()))
+            _last_embed_start = time.monotonic()
         return GeminiClient().embed(text)
 
 class RequestsFetcher:

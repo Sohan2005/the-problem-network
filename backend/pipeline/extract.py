@@ -28,8 +28,9 @@ from pipeline.publish import AI_SOURCES
 STAGE = "extract"
 QUOTA_NOTE = "quota"
 MAX_ATTEMPTS = 3
-CALL_INTERVAL_SECONDS = 5  # Free-tier rate limit, same pause as the old extraction scripts
+CALL_INTERVAL_SECONDS = 5  # at most 12 calls per minute, also across runs in one process (extract, extract_again)
 _EPOCH = datetime(1970, 1, 1)
+_last_call_end = None  # time.monotonic() when the latest extraction call in this process returned
 
 class GeminiClient(_GeminiClient):
     """Default LLM client. Anything with generate(prompt) -> str can be passed instead (tests use a fake)."""
@@ -55,6 +56,19 @@ def ranked_ids(db, max_items) -> list:
     pool = (_eligible(db.query(RawIdea.id, RawIdea.source, RawIdea.raw_title, RawIdea.raw_text, RawIdea.source_date))
             .filter(RawIdea.extraction_attempts < MAX_ATTEMPTS).all())
     return [row.id for row in sorted(pool, key=rank_key)[:max_items]]
+
+def _pause(deadline: float):
+    """Sleep until CALL_INTERVAL_SECONDS have passed since the previous extraction call (or the deadline)."""
+    if _last_call_end is not None and CALL_INTERVAL_SECONDS:
+        wait = _last_call_end + CALL_INTERVAL_SECONDS - time.monotonic()
+        time.sleep(max(0, min(wait, deadline - time.monotonic())))
+
+def _generate(llm_client, prompt: str) -> str:
+    global _last_call_end
+    try:
+        return llm_client.generate(prompt)
+    finally:
+        _last_call_end = time.monotonic()
 
 def _text(value):
     if isinstance(value, list):
@@ -96,9 +110,8 @@ def run_extraction(db, llm_client, max_items, budget_seconds) -> dict:
     try:
         summary["exhausted"] = _eligible(db.query(RawIdea)).filter(RawIdea.extraction_attempts >= MAX_ATTEMPTS).count()
         row_ids = ranked_ids(db, max_items)
-        for index, row_id in enumerate(row_ids):
-            if index and CALL_INTERVAL_SECONDS:
-                time.sleep(max(0, min(CALL_INTERVAL_SECONDS, deadline - time.monotonic())))
+        for row_id in row_ids:
+            _pause(deadline)
             if time.monotonic() >= deadline:
                 summary["stopped_by_budget"] = True
                 break
@@ -108,7 +121,7 @@ def run_extraction(db, llm_client, max_items, budget_seconds) -> dict:
             summary["attempted"] += 1
             try:
                 prompt = build_forum_prompt(row.raw_text, row.source_url, row.source)
-                _apply_result(row, parse_forum_response(llm_client.generate(prompt)))
+                _apply_result(row, parse_forum_response(_generate(llm_client, prompt)))
                 db.commit()
             except QuotaExhausted:
                 db.rollback()

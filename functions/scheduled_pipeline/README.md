@@ -3,7 +3,7 @@
 ## Overview
 This Azure Function app runs the daily extraction and publishing pipeline for The Problem Network:
 - **daily_extraction**: Runs daily at 9:00 AM UTC - processes HN and Stack Exchange backlog
-- **daily_publish**: Runs daily at 10:00 AM UTC - promotes up to 10 ready_to_publish records to briefs
+- **daily_publish**: Runs daily at 10:00 AM UTC - promotes up to 5 ready_to_publish records to briefs
 
 ## Azure Free Tier Compliance
 

@@ -16,10 +16,10 @@ project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 env_path = os.path.join(project_root, '.env')
 load_dotenv(env_path)
 
-def daily_publish_to_briefs(limit=10):
+def daily_publish_to_briefs(limit=5):
     """
     Daily automated publish function:
-    - Takes UP TO 10 records marked ready_to_publish
+    - Takes UP TO 5 records marked ready_to_publish
     - Promotes them to live briefs table
     - Uses oldest-approved-first ordering
     - Requires NO manual action once records are marked ready
@@ -92,4 +92,4 @@ def daily_publish_to_briefs(limit=10):
         db.close()
 
 if __name__ == "__main__":
-    daily_publish_to_briefs(limit=10)
+    daily_publish_to_briefs(limit=5)
