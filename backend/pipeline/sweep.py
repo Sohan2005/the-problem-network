@@ -135,13 +135,14 @@ def _se_tag_run(site, tags, start_ts, end_ts, get):
     return lambda budget: stackexchange_ingest.tag_search(site, tags, budget_seconds=budget, start_ts=start_ts,
                                                           end_ts=end_ts, get=get)
 
-def incremental_units(now: datetime, hn_get=None, se_get=None) -> list:
+def incremental_units(now: datetime, hn_get=None, se_get=None, hn_list=None, se_list=None, se_sites=None) -> list:
     start_ts, end_ts = _ts(now - timedelta(days=INCREMENTAL_DAYS)), _ts(now)
     window = f"{INCREMENTAL_DAYS}d"
     hn_units = [Unit(INCREMENTAL, HN, HN_SITE, p, window, start_ts, end_ts, _hn_phrase_run(p, start_ts, end_ts, hn_get))
-                for p in hn_phrases()[:INCREMENTAL_PHRASES]]
+                for p in (hn_phrases() if hn_list is None else hn_list)[:INCREMENTAL_PHRASES]]
     se_units = [Unit(INCREMENTAL, SE, site["site"], p, window, start_ts, end_ts, _se_phrase_run(site, p, start_ts, end_ts, se_get))
-                for p in all_phrases()[:INCREMENTAL_PHRASES] for site in stackexchange_ingest.SITES]
+                for p in (all_phrases() if se_list is None else se_list)[:INCREMENTAL_PHRASES]
+                for site in (stackexchange_ingest.SITES if se_sites is None else se_sites)]
     return list(_interleave(hn_units, se_units))
 
 def hn_way1_units(now: datetime, phrases=None, get=None) -> list:
@@ -155,8 +156,8 @@ def se_way1_units(now: datetime, phrases=None, sites=None, get=None) -> list:
             for p in (all_phrases() if phrases is None else phrases)
             for site in (stackexchange_ingest.SITES if sites is None else sites)]
 
-def way1_units(now: datetime, hn_get=None, se_get=None) -> list:
-    return list(_interleave(hn_way1_units(now, get=hn_get), se_way1_units(now, get=se_get)))
+def way1_units(now: datetime, hn_get=None, se_get=None, hn_list=None, se_list=None, se_sites=None) -> list:
+    return list(_interleave(hn_way1_units(now, hn_list, get=hn_get), se_way1_units(now, se_list, se_sites, get=se_get)))
 
 def hn_way2_units(now: datetime, get=None) -> list:
     return [Unit(WAY2, HN, HN_SITE, "all", label, start_ts, end_ts, _hn_sweep_run(start_ts, end_ts, get))
@@ -200,8 +201,12 @@ def real_pending(db) -> int:
         RawIdea.extraction_attempts < MAX_ATTEMPTS,
     ).count()
 
-def plan(now: datetime, progress: dict, tags_for, hn_get=None, se_get=None):
-    """Due units in ladder order: incremental, new Way 1, new Way 2 (only when Way 1 is complete), then repeats."""
+def plan(now: datetime, progress: dict, tags_for, hn_get=None, se_get=None, hn_list=None, se_list=None, se_sites=None):
+    """
+    Due units in ladder order: incremental, new Way 1, new Way 2 (only when Way 1 is complete), then repeats.
+    hn_list, se_list and se_sites narrow the incremental and Way 1 units to those phrases and sites; Way 2 still waits
+    for the complete, unnarrowed Way 1.
+    """
     def new(units):
         return (u for u in units if u.stage not in progress)
 
@@ -211,10 +216,11 @@ def plan(now: datetime, progress: dict, tags_for, hn_get=None, se_get=None):
             if interval is not None and now - progress[u.stage] >= interval:
                 yield u
 
-    yield from (u for u in incremental_units(now, hn_get, se_get)
+    yield from (u for u in incremental_units(now, hn_get, se_get, hn_list, se_list, se_sites)
                 if u.stage not in progress or now - progress[u.stage] >= repeat_interval(u, now))
-    first = way1_units(now, hn_get, se_get)
-    way1_complete = all(u.stage in progress for u in first)
+    first = way1_units(now, hn_get, se_get, hn_list, se_list, se_sites)
+    narrowed = any(limit is not None for limit in (hn_list, se_list, se_sites))
+    way1_complete = all(u.stage in progress for u in (way1_units(now) if narrowed else first))
     yield from new(first)
     if way1_complete:
         yield from new(way2_units(now, tags_for, hn_get, se_get))
@@ -295,8 +301,12 @@ def run_units(db, units, *, budget_seconds, pending_start=0, summary=None) -> di
             summary["status"] = "warn"
     return summary
 
-def run_sweep(db, budget_seconds, *, now=None, hn_get=None, se_get=None) -> dict:
-    """Walk the ladder for one tick within budget_seconds, log a summary row with stage 'sweep' and return the summary."""
+def run_sweep(db, budget_seconds, *, now=None, hn_get=None, se_get=None, hn_list=None, se_list=None,
+              se_sites=None) -> dict:
+    """
+    Walk the ladder for one tick within budget_seconds, log a summary row with stage 'sweep' and return the summary.
+    hn_list / se_list (phrases) and se_sites (entries of stackexchange_ingest.SITES) narrow the ladder; see plan.
+    """
     deadline = time.monotonic() + budget_seconds
     started_at = datetime.now(timezone.utc)
     now = now or started_at
@@ -319,7 +329,7 @@ def run_sweep(db, budget_seconds, *, now=None, hn_get=None, se_get=None) -> dict
         if pending >= REAL_PENDING_TARGET:
             summary["status"], summary["reason"] = "skipped", f"real pending rows {pending} >= {REAL_PENDING_TARGET}"
         else:
-            units = plan(now, load_progress(db), tags_for, hn_get, se_get)
+            units = plan(now, load_progress(db), tags_for, hn_get, se_get, hn_list, se_list, se_sites)
             run_units(db, units, budget_seconds=deadline - time.monotonic(), pending_start=pending, summary=summary)
     except Exception as e:
         db.rollback()

@@ -105,12 +105,18 @@ def _failed(result) -> bool:
         return True
     return any(isinstance(v, dict) and v.get("status") == "error" for v in result.values())
 
-def run_pipeline(db, llm_client, embed_client, fetcher, total_budget_seconds) -> dict:
-    """Run one tick within total_budget_seconds and return a summary (stage results, buffer, status)."""
+def run_pipeline(db, llm_client, embed_client, fetcher, total_budget_seconds, *, sweep_options=None,
+                 extract_limit=None) -> dict:
+    """
+    Run one tick within total_budget_seconds and return a summary (stage results, buffer, status).
+    sweep_options: keyword arguments for run_sweep (phrase and site limits, injected HTTP getters).
+    extract_limit: at most this many rows extracted in the whole tick (extract and extract_again together).
+    """
     deadline = time.monotonic() + total_budget_seconds
     started_at = datetime.now(timezone.utc)
     stages, failed = {}, []
     quota_hit = False
+    extracted = 0
 
     def remaining():
         return max(0.0, deadline - time.monotonic())
@@ -133,12 +139,20 @@ def run_pipeline(db, llm_client, embed_client, fetcher, total_budget_seconds) ->
         return result
 
     def extract(budget):
+        nonlocal extracted
         allowed = EXTRACTION_DAILY_CAP - extraction_calls_today(db, datetime.now(timezone.utc))
         if allowed <= 0:
             return {"status": "skipped", "reason": f"daily extraction cap {EXTRACTION_DAILY_CAP} reached"}
-        return run_extraction(db, llm_client, min(EXTRACT_MAX_ITEMS, allowed), budget)
+        max_items = min(EXTRACT_MAX_ITEMS, allowed)
+        if extract_limit is not None:
+            if extracted >= extract_limit:
+                return {"status": "skipped", "reason": f"tick extraction limit {extract_limit} reached"}
+            max_items = min(max_items, extract_limit - extracted)
+        result = run_extraction(db, llm_client, max_items, budget)
+        extracted += result.get("attempted", 0)
+        return result
 
-    stage("ingest", SHARE["ingest"], lambda budget: run_sweep(db, budget))
+    stage("ingest", SHARE["ingest"], lambda budget: run_sweep(db, budget, **(sweep_options or {})))
     stage("prefilter", SHARE["prefilter"], lambda budget: run_prefilter(db, PREFILTER_MAX_ITEMS, budget))
     stage("extract", SHARE["extract"], extract, uses_gemini=True)
     stage("gates", SHARE["gates"], lambda budget: run_gates(db, embed_client, GATES_MAX_ITEMS, budget), uses_gemini=True)
