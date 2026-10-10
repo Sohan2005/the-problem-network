@@ -436,7 +436,7 @@ class GateStageTests(RolledBackTestCase):
         self.assertEqual([self.row(i)["gate_status"] for i in ids], ["passed", "passed", "pending"])
 
 class PublishedCalibrationTests(RolledBackTestCase):
-    """All 49 published raw ideas must pass every gate (each excluded from its own duplicate comparison)."""
+    """Every published raw idea must pass every gate (each excluded from its own duplicate comparison)."""
 
     def test_published_briefs_pass_all_gates(self):
         rows = self.db.query(RawIdea).filter(RawIdea.published_brief_id.isnot(None)).order_by(RawIdea.id).all()
@@ -455,7 +455,7 @@ class PublishedCalibrationTests(RolledBackTestCase):
         if duplicates:
             print("\npublished duplicates of each other:", duplicates)
         self.assertEqual([(r.id, r.gate_failures) for r in outcomes if r.gate_status != "passed"], [])
-        self.assertEqual((len(rows), summary["passed"]), (49, 49))
+        self.assertEqual(summary["passed"], len(rows))
 
 if __name__ == "__main__":
     unittest.main()

@@ -89,7 +89,9 @@ class StageTestCase(RolledBackTestCase):
         return self.conn.execute(text("select * from raw_ideas where id = :id"), {"id": row_id}).mappings().one()
 
     def runs(self, stage):
-        return self.conn.execute(text("select rows_in, rows_out, status, error from pipeline_runs where stage = :s and started_at >= now() order by id"),
+        # started_at comes from this machine's clock, now() from the database's; allow for clock skew.
+        return self.conn.execute(text("select rows_in, rows_out, status, error from pipeline_runs where stage = :s "
+                                      "and started_at >= now() - interval '5 seconds' order by id"),
                                  {"s": stage}).mappings().all()
 
 class PrefilterStageTests(StageTestCase):
