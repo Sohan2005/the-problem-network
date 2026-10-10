@@ -106,12 +106,14 @@ def _failed(result) -> bool:
     return any(isinstance(v, dict) and v.get("status") == "error" for v in result.values())
 
 def run_pipeline(db, llm_client, embed_client, fetcher, total_budget_seconds, *, sweep_options=None,
-                 extract_limit=None) -> dict:
+                 extract_limit=None, gates_limit=None) -> dict:
     """
     Run one tick within total_budget_seconds and return a summary (stage results, buffer, status).
-    sweep_options: keyword arguments for run_sweep (phrase and site limits, injected HTTP getters).
+    sweep_options: keyword arguments for run_sweep (phrase and site limits, pending target, injected HTTP getters).
     extract_limit: at most this many rows extracted in the whole tick (extract and extract_again together).
+    gates_limit: max_items for each gates stage instead of GATES_MAX_ITEMS.
     """
+    gates_items = GATES_MAX_ITEMS if gates_limit is None else gates_limit
     deadline = time.monotonic() + total_budget_seconds
     started_at = datetime.now(timezone.utc)
     stages, failed = {}, []
@@ -155,7 +157,7 @@ def run_pipeline(db, llm_client, embed_client, fetcher, total_budget_seconds, *,
     stage("ingest", SHARE["ingest"], lambda budget: run_sweep(db, budget, **(sweep_options or {})))
     stage("prefilter", SHARE["prefilter"], lambda budget: run_prefilter(db, PREFILTER_MAX_ITEMS, budget))
     stage("extract", SHARE["extract"], extract, uses_gemini=True)
-    stage("gates", SHARE["gates"], lambda budget: run_gates(db, embed_client, GATES_MAX_ITEMS, budget), uses_gemini=True)
+    stage("gates", SHARE["gates"], lambda budget: run_gates(db, embed_client, gates_items, budget), uses_gemini=True)
 
     buffer = stage("buffer", 0, lambda _: buffer_size(db))
     topped_up = False
@@ -169,7 +171,7 @@ def run_pipeline(db, llm_client, embed_client, fetcher, total_budget_seconds, *,
         if remaining() >= MIN_STAGE_SECONDS:
             stage("extract_again", SHARE["extract_again"], extract, uses_gemini=True)
         if remaining() >= MIN_STAGE_SECONDS:
-            stage("gates_again", 1.0, lambda budget: run_gates(db, embed_client, GATES_MAX_ITEMS, budget), uses_gemini=True)
+            stage("gates_again", 1.0, lambda budget: run_gates(db, embed_client, gates_items, budget), uses_gemini=True)
         buffer = stage("buffer_after_topup", 0, lambda _: buffer_size(db))
 
     buffer = buffer if isinstance(buffer, int) else None

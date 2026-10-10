@@ -233,7 +233,7 @@ def _new_summary() -> dict:
             "skipped_duplicate": 0, "rejected": 0, "calls": {HN: 0, SE: 0}, "stopped": {}, "sites": {},
             "real_pending": None, "se_quota_remaining": None}
 
-def run_units(db, units, *, budget_seconds, pending_start=0, summary=None) -> dict:
+def run_units(db, units, *, budget_seconds, pending_start=0, summary=None, pending_target=REAL_PENDING_TARGET) -> dict:
     """
     Run units in order within budget_seconds, store their candidates with insert_raw_ideas and write one pipeline_runs
     row per unit ('ok' when finished, 'warn' when stopped). Never raises; see the module docstring for the stops.
@@ -246,7 +246,7 @@ def run_units(db, units, *, budget_seconds, pending_start=0, summary=None) -> di
         if deadline - time.monotonic() < MIN_UNIT_SECONDS:
             summary["reason"] = summary["reason"] or "budget"
             break
-        if pending_start + summary["inserted"] >= REAL_PENDING_TARGET:
+        if pending_start + summary["inserted"] >= pending_target:
             summary["reason"] = summary["reason"] or "real pending target reached"
             break
         if len(stopped) == 2:
@@ -302,10 +302,11 @@ def run_units(db, units, *, budget_seconds, pending_start=0, summary=None) -> di
     return summary
 
 def run_sweep(db, budget_seconds, *, now=None, hn_get=None, se_get=None, hn_list=None, se_list=None,
-              se_sites=None) -> dict:
+              se_sites=None, pending_target=REAL_PENDING_TARGET) -> dict:
     """
     Walk the ladder for one tick within budget_seconds, log a summary row with stage 'sweep' and return the summary.
     hn_list / se_list (phrases) and se_sites (entries of stackexchange_ingest.SITES) narrow the ladder; see plan.
+    pending_target replaces REAL_PENDING_TARGET as the real-pending stop.
     """
     deadline = time.monotonic() + budget_seconds
     started_at = datetime.now(timezone.utc)
@@ -326,11 +327,12 @@ def run_sweep(db, budget_seconds, *, now=None, hn_get=None, se_get=None, hn_list
 
     try:
         summary["real_pending"] = pending = real_pending(db)
-        if pending >= REAL_PENDING_TARGET:
-            summary["status"], summary["reason"] = "skipped", f"real pending rows {pending} >= {REAL_PENDING_TARGET}"
+        if pending >= pending_target:
+            summary["status"], summary["reason"] = "skipped", f"real pending rows {pending} >= {pending_target}"
         else:
             units = plan(now, load_progress(db), tags_for, hn_get, se_get, hn_list, se_list, se_sites)
-            run_units(db, units, budget_seconds=deadline - time.monotonic(), pending_start=pending, summary=summary)
+            run_units(db, units, budget_seconds=deadline - time.monotonic(), pending_start=pending, summary=summary,
+                      pending_target=pending_target)
     except Exception as e:
         db.rollback()
         summary["status"], summary["reason"] = "warn", safe_error(e)
