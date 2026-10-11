@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 from datetime import datetime
@@ -9,43 +10,53 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from llm.translate import generate_embedding
 from db.database import SessionLocal
 from db.models import RawIdea, Brief
-from pipeline.publish import brief_fields, embedding_text
+from pipeline.publish import brief_fields, embedding_text, missing_getting_started
 
 # Load .env from project root (relative to this script)
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 env_path = os.path.join(project_root, '.env')
 load_dotenv(env_path)
 
-def daily_publish_to_briefs(limit=5):
+def daily_publish_to_briefs(limit=5, db=None, embed=generate_embedding):
     """
     Daily automated publish function:
     - Takes UP TO 5 records marked ready_to_publish
     - Promotes them to live briefs table
     - Uses oldest-approved-first ordering
     - Requires NO manual action once records are marked ready
+    - Skips (and logs) records whose what_youll_need or how_to_begin is empty; they stay ready_to_publish
+    db and embed default to the configured database and Gemini embeddings (tests pass a session and a fake).
     """
     
-    db = SessionLocal()
+    owns_session = db is None
+    if owns_session:
+        db = SessionLocal()
     try:
         # Get ready_to_publish records, oldest first
         records = db.query(RawIdea).filter(
             RawIdea.ready_to_publish == True,
             RawIdea.processed_at != None
-        ).order_by(RawIdea.ready_to_publish_at.asc()).limit(limit).all()
+        ).order_by(RawIdea.ready_to_publish_at.asc()).all()
         
         if not records:
             print("No ready_to_publish records found. Nothing to publish.")
             return 0
         
-        print(f"Found {len(records)} ready_to_publish records to promote\n")
+        print(f"Found {len(records)} ready_to_publish records\n")
         
         promoted_count = 0
         
         for record in records:
+            if promoted_count >= limit:
+                break
             raw_id = record.id
             
             # Insert into briefs table (rescoped fields for needs_rescope, extracted fields otherwise)
             fields = brief_fields(record)
+            missing = missing_getting_started(fields)
+            if missing:
+                logging.warning("daily publish: skipping raw idea %d, empty %s", raw_id, ", ".join(missing))
+                continue
             title = fields["title"]
             brief = Brief(**fields, created_at=datetime.utcnow())
             db.add(brief)
@@ -55,7 +66,7 @@ def daily_publish_to_briefs(limit=5):
             
             # Generate embedding for dedup (Step 5)
             combined_text = embedding_text(fields)
-            embedding = generate_embedding(combined_text)
+            embedding = embed(combined_text)
             embedding_str = f"[{','.join(map(str, embedding))}]"
             
             # Update brief with embedding using raw SQL for pgvector
@@ -89,7 +100,8 @@ def daily_publish_to_briefs(limit=5):
         db.rollback()
         return 0
     finally:
-        db.close()
+        if owns_session:
+            db.close()
 
 if __name__ == "__main__":
     daily_publish_to_briefs(limit=5)

@@ -7,6 +7,9 @@ least FLEX_MIN (3) available) or a SHORTFALL. A buffer below BUFFER_TARGET (15) 
 reported. Everything happens in one transaction; the publish_days primary key makes a
 second run for the same day a no-op, and briefs.raw_idea_id is unique, so overlapping runs cannot double-publish.
 
+Every brief carries Getting Started text: candidates with an empty what_youll_need or how_to_begin are skipped and
+logged (they neither publish nor count towards the buffer).
+
 Real-sourced candidates (fetched posts) are chosen first by gate score; the remainder is filled with AI_SOURCES rows,
 at most AI_MAX_PER_DAY of them per day. Link policy: briefs store no URL; the API shows the raw idea's link only
 when source_link allows it (hackernews and stackexchange_* posts), never for AI_SOURCES.
@@ -39,6 +42,7 @@ BUFFER_TARGET = 15
 VALID_IDEA = ("true", "needs_rescope")
 AI_SOURCES = ("ai_suggested", "web_grounding")  # no fetched post behind them
 AI_MAX_PER_DAY = 5
+GETTING_STARTED_FIELDS = ("what_youll_need", "how_to_begin")
 
 def source_link(source, url):
     """The URL a brief may show: only real posts fetched from the Hacker News and Stack Exchange APIs."""
@@ -52,8 +56,21 @@ def choose(candidates, target: int) -> list:
     chosen = real[:target]
     return chosen + ai[:max(0, min(AI_MAX_PER_DAY, target - len(chosen)))]
 
+def getting_started(record) -> dict:
+    """what_youll_need and how_to_begin from the row columns, for needs_rescope falling back to rescoped_version."""
+    rescoped = record.rescoped_version if record.is_valid_idea == "needs_rescope" else None
+    rescoped = rescoped if isinstance(rescoped, dict) else {}
+    return {name: getattr(record, name) or rescoped.get(name) for name in GETTING_STARTED_FIELDS}
+
+def missing_getting_started(fields: dict) -> list:
+    """Names of the Getting Started fields that are empty in fields."""
+    return [name for name in GETTING_STARTED_FIELDS if not (isinstance(fields.get(name), str) and fields[name].strip())]
+
 def brief_fields(record) -> dict:
-    """Brief columns for a raw idea: the rescoped version for needs_rescope ideas, the extracted columns otherwise."""
+    """
+    Brief columns for a raw idea: the rescoped version for needs_rescope ideas, the extracted columns otherwise;
+    Getting Started as in getting_started().
+    """
     rescoped_version = record.rescoped_version
     if record.is_valid_idea == "needs_rescope" and rescoped_version:
         title = rescoped_version.get("title")
@@ -79,6 +96,7 @@ def brief_fields(record) -> dict:
         "target_user": target,
         "suggested_features": features_list,
         "learning_outcomes": learning_list,
+        **getting_started(record),
         "raw_idea_id": record.id,
         "source_date": record.source_date,
     }
@@ -129,8 +147,16 @@ def run_publish(db, embed_client, today=None) -> dict:
     flexible = is_flexible_day(today)
     rows_in = 0
     quota = False
+    skipped = []
     try:
-        candidates = candidates_query(db).all()
+        candidates = []
+        for record in candidates_query(db).all():
+            missing = missing_getting_started(getting_started(record))
+            if missing:
+                logging.warning("publish: skipping raw idea %d, empty %s", record.id, ", ".join(missing))
+                skipped.append(record.id)
+            else:
+                candidates.append(record)
         rows_in = len(candidates)
         available = len(choose(candidates, len(candidates)))
         chosen = choose(candidates, DAILY_TARGET)
@@ -157,7 +183,7 @@ def run_publish(db, embed_client, today=None) -> dict:
             _log_run(db, started_at, rows_in, 0, "warn", QUOTA_NOTE)
             return {"status": "warn", "day": today.isoformat(), "published": 0, "brief_ids": [], "quota": True,
                     "is_flexible_day": flexible, "buffer_before": rows_in, "buffer_after": rows_in, "note": QUOTA_NOTE,
-                    "buffer_low": rows_in < BUFFER_TARGET}
+                    "buffer_low": rows_in < BUFFER_TARGET, "skipped": skipped}
         published = len(brief_ids)
         note = day_note(published, available, flexible)
         db.add(PublishDay(day=today, target=DAILY_TARGET, published=published, is_flexible_day=flexible,
@@ -174,8 +200,10 @@ def run_publish(db, embed_client, today=None) -> dict:
     if buffer_after < BUFFER_TARGET:
         logging.warning("publish: buffer low (%d passed, unpublished briefs; target %d)", buffer_after, BUFFER_TARGET)
         notes.append(f"buffer low: {buffer_after} < {BUFFER_TARGET}")
+    if skipped:
+        notes.append(f"skipped {len(skipped)} without getting started")
     error = "; ".join(notes) or None
     _log_run(db, started_at, rows_in, published, status, error)
     return {"status": status, "day": today.isoformat(), "published": published, "brief_ids": brief_ids,
             "is_flexible_day": flexible, "buffer_before": rows_in, "buffer_after": buffer_after, "note": note,
-            "buffer_low": buffer_after < BUFFER_TARGET, "quota": quota}
+            "buffer_low": buffer_after < BUFFER_TARGET, "quota": quota, "skipped": skipped}
