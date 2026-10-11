@@ -3,6 +3,8 @@ Step 3 extraction: one synchronous LLM call per prefiltered row, using the promp
 
 Each row gets at most MAX_ATTEMPTS calls: extraction_attempts is incremented and committed before the call,
 so a crash mid-call still counts. Gate, ready and published columns are never touched here.
+what_youll_need and how_to_begin are stored on the row for valid and needs_rescope ideas alike (from rescoped_version
+for the latter); a reply without them is a failed attempt and nothing of it is saved.
 
 Rows are chosen by rank: real sources before AI_SOURCES, then the local intent score (computed on the fly from
 raw_title and raw_text, highest first), then source_date (newest first).
@@ -92,8 +94,9 @@ def _apply_result(row, result: dict):
     row.difficulty_estimate = result["difficulty_estimate"]
     row.suggested_tech_stack = result["suggested_tech_stack"]
     row.learning_outcomes = result["learning_outcomes"]
-    row.what_youll_need = _text(result.get("what_youll_need"))
-    row.how_to_begin = _text(result.get("how_to_begin"))
+    getting_started = result["rescoped_version"] if is_valid == "needs_rescope" else result
+    row.what_youll_need = _text(getting_started.get("what_youll_need"))
+    row.how_to_begin = _text(getting_started.get("how_to_begin"))
     row.processed_at = datetime.now(timezone.utc).replace(tzinfo=None)
     row.last_error = None
 

@@ -133,7 +133,8 @@ class ExtractionStageTests(StageTestCase):
     def test_success(self):
         valid_id = self.make_eligible()
         rescope_id = self.make_eligible()
-        rescoped = {"title": "Smaller", "problem_summary": "P"}
+        rescoped = {"title": "Smaller", "problem_summary": "P", "what_youll_need": "- Python 3 and pip installed locally",
+                    "how_to_begin": "1. Create the project folder"}
         llm = FakeLLM(_reply(True), _reply("needs_rescope", rescoped_version=rescoped, original_ask="Big"))
 
         summary = extract.run_extraction(self.db, llm, max_items=10, budget_seconds=60)
@@ -145,13 +146,31 @@ class ExtractionStageTests(StageTestCase):
         self.assertIn("MATCHING COMMENT:", llm.prompts[0])
         valid = self.row(valid_id)
         self.assertEqual((valid["is_valid_idea"], valid["extracted_title"], valid["extraction_attempts"]), ("true", "Habit tracker for dorms", 1))
-        self.assertEqual(valid["what_youll_need"], "An account\nA laptop")
+        self.assertEqual((valid["what_youll_need"], valid["how_to_begin"]), ("- An account\n- A laptop", "1. Start"))
         self.assertIsNotNone(valid["processed_at"])
         self.assertIsNone(valid["last_error"])
         self.assertEqual((valid["gate_status"], valid["ready_to_publish"], valid["published_at"], valid["published_brief_id"]), ("pending", False, None, None))
         rescope = self.row(rescope_id)
         self.assertEqual((rescope["is_valid_idea"], rescope["rescoped_version"], rescope["original_ask"]), ("needs_rescope", rescoped, "Big"))
+        self.assertEqual((rescope["what_youll_need"], rescope["how_to_begin"]), (rescoped["what_youll_need"], rescoped["how_to_begin"]))
         self.assertEqual([dict(r) for r in self.runs("extract")], [{"rows_in": 2, "rows_out": 2, "status": "ok", "error": None}])
+
+    def test_missing_getting_started_is_a_failed_attempt(self):
+        valid_id = self.make_eligible()
+        rescope_id = self.make_eligible()
+        rescoped = {"title": "Smaller", "problem_summary": "P", "what_youll_need": "- A laptop"}
+        llm = FakeLLM(_reply(True, how_to_begin=None), _reply("needs_rescope", rescoped_version=rescoped))
+
+        summary = extract.run_extraction(self.db, llm, max_items=10, budget_seconds=60)
+
+        self.assertEqual((summary["attempted"], summary["succeeded"], summary["failed"]), (2, 0, 2))
+        valid = self.row(valid_id)
+        self.assertEqual((valid["extraction_attempts"], valid["processed_at"], valid["is_valid_idea"], valid["extracted_title"],
+                          valid["what_youll_need"]), (1, None, None, None, None))
+        self.assertEqual(valid["last_error"], "ValueError: Missing getting started field(s): how_to_begin")
+        rescope = self.row(rescope_id)
+        self.assertEqual((rescope["extraction_attempts"], rescope["processed_at"], rescope["rescoped_version"]), (1, None, None))
+        self.assertEqual(rescope["last_error"], "ValueError: Missing getting started field(s): rescoped_version.how_to_begin")
 
     def test_rejected_idea_stored_as_false(self):
         row_id = self.make_eligible()
