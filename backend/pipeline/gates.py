@@ -1,7 +1,7 @@
 """
 Automated quality gates: decide which extracted ideas may enter the ready queue.
 
-Order: eligibility -> structure -> source red flags -> source overlap -> duplicates -> score.
+Order: eligibility -> structure -> getting started -> source red flags -> source overlap -> duplicates -> score.
 No gate fetches the source page: ai_suggested and web_grounding rows (AI_SOURCES) have no verifiable post, so they
 are checked against their own raw_text like every other row.
 Every gate function is pure and returns (passed, reason, score_part). A reason is "code: detail", several
@@ -12,8 +12,10 @@ is logged as 'warn' with the note 'quota'.
 
 Thresholds are calibrated (2026-10) on the 49 published briefs so all of them pass:
 - structure ranges: published title 19-64 chars, problem_summary 85-278, target_user 22-155, features 2-5,
-  learning outcomes 2-3, tech stack 1-4; extraction never fills what_youll_need / how_to_begin for
-  rescoped ideas, so those are optional.
+  learning outcomes 2-3, tech stack 1-4.
+- getting started: what_youll_need and how_to_begin are shown on every brief, so both are required with
+  GETTING_STARTED_LEN characters. They live in the row columns for valid and rescoped ideas alike (older rescoped
+  rows only have them inside rescoped_version, which is the fallback).
 - lexical overlap of brief title+problem with raw_title+raw_text: published minimum 0.0 for HN (a comment
   paraphrased with no shared word), 0.20 for Stack Exchange, 0.263 for web grounding. Rejected rows have the
   same median (0.44) as published ones, so overlap only screens out briefs unrelated to their source.
@@ -65,7 +67,8 @@ FEATURES_COUNT = (1, 8)
 LEARNING_COUNT = (1, 6)
 STACK_COUNT = (0, 8)
 LIST_ITEM_MAX = 300
-OPTIONAL_TEXT_MAX = 3000
+GETTING_STARTED_FIELDS = ("what_youll_need", "how_to_begin")
+GETTING_STARTED_LEN = (30, 3000)
 PLACEHOLDER = re.compile(r"\b(?:n/a|tbd|tba|lorem|ipsum)\b", re.I)
 PLACEHOLDER_VALUES = {"none", "null", "-", "...", "?"}
 
@@ -129,20 +132,26 @@ def html_to_text(page: str) -> str:
 # --- candidate ---
 
 def effective_fields(row) -> dict:
-    """Brief fields to gate: rescoped_version for needs_rescope, the extracted columns otherwise."""
+    """
+    Brief fields to gate: rescoped_version for needs_rescope, the extracted columns otherwise. Getting Started comes
+    from the row columns, for needs_rescope falling back to rescoped_version.
+    """
+    rescoped = row.rescoped_version if isinstance(row.rescoped_version, dict) else {}
     if row.is_valid_idea == "needs_rescope":
-        rescoped = row.rescoped_version if isinstance(row.rescoped_version, dict) else {}
         get = rescoped.get
     else:
+        rescoped = {}
         get = {
             "title": row.extracted_title, "problem_summary": row.problem_summary, "target_user": row.target_user,
             "suggested_features": row.suggested_features, "learning_outcomes": row.learning_outcomes,
             "suggested_tech_stack": row.suggested_tech_stack, "difficulty_estimate": row.difficulty_estimate,
-            "what_youll_need": row.what_youll_need, "how_to_begin": row.how_to_begin,
         }.get
     keys = ("title", "problem_summary", "target_user", "suggested_features", "learning_outcomes",
-            "suggested_tech_stack", "difficulty_estimate", "what_youll_need", "how_to_begin")
-    return {key: get(key) for key in keys}
+            "suggested_tech_stack", "difficulty_estimate")
+    fields = {key: get(key) for key in keys}
+    for name in GETTING_STARTED_FIELDS:
+        fields[name] = getattr(row, name) or rescoped.get(name)
+    return fields
 
 def brief_text(fields: dict) -> str:
     """Text embedded for duplicate checks; matches what daily_publish stores on briefs."""
@@ -203,12 +212,15 @@ def gate_structure(fields: dict):
     _check_list(problems, "suggested_tech_stack", fields.get("suggested_tech_stack"), STACK_COUNT)
     if fields.get("difficulty_estimate") not in DIFFICULTIES:
         problems.append(f"bad_difficulty: {fields.get('difficulty_estimate')!r}")
-    for name in ("what_youll_need", "how_to_begin"):
-        value = fields.get(name)
-        if value is not None and (not isinstance(value, str) or len(value) > OPTIONAL_TEXT_MAX):
-            problems.append(f"out_of_range: {name}")
     problems += [f"placeholder: {name}" for name in dict.fromkeys(_placeholders(fields))]
     return not problems, "; ".join(problems) or None, 25 * structure_completeness(fields)
+
+def gate_getting_started(fields: dict):
+    """Both Getting Started texts present with GETTING_STARTED_LEN characters (stripped)."""
+    problems = []
+    for name in GETTING_STARTED_FIELDS:
+        _check_text(problems, name, fields.get(name), GETTING_STARTED_LEN)
+    return not problems, "; ".join(problems) or None, 0.0
 
 def gate_red_flags(raw_title, raw_text, source_url):
     problems = []
@@ -249,6 +261,7 @@ def evaluate_static(row, now: datetime):
     fields = effective_fields(row)
     results = {
         "structure": gate_structure(fields),
+        "getting_started": gate_getting_started(fields),
         "red_flags": gate_red_flags(row.raw_title, row.raw_text, row.source_url),
         "grounding": gate_grounding(fields, row.source, row.raw_title, row.raw_text),
     }

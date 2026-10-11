@@ -24,8 +24,9 @@ GOOD = {
     "learning_outcomes": ["CRUD web apps", "Relational data modelling"],
     "suggested_tech_stack": ["Python", "PostgreSQL"],
     "difficulty_estimate": "beginner",
-    "what_youll_need": None,
-    "how_to_begin": None,
+    "what_youll_need": "- A code editor such as VS Code\n- Python 3 and pip installed locally\n- Git for version control",
+    "how_to_begin": "1. Create a Flask project with a virtual environment.\n2. Define PostgreSQL tables for routes and sends.\n"
+                    "3. Build the route list page and the form to log a send.",
 }
 SOURCE_TEXT = ("STORY: Ask HN: What do you wish existed?\n\nSTORY URL: \n\nMATCHING COMMENT: I wish there was a tool where "
                "climbers at my gym could track routes they have sent, see route grades and setter notes, because small "
@@ -140,9 +141,43 @@ class StructureGateTests(unittest.TestCase):
         self.assert_fail("placeholder: what_youll_need", what_youll_need="N/A")
         self.assert_pass(title="Todo list sharing app")
 
-    def test_optional_texts(self):
-        self.assert_pass(what_youll_need="A laptop", how_to_begin="1. Start")
-        self.assert_fail("out_of_range: how_to_begin", how_to_begin="x" * (gates.OPTIONAL_TEXT_MAX + 1))
+class GettingStartedGateTests(unittest.TestCase):
+
+    def gate(self, **overrides):
+        return gates.gate_getting_started(fields(**overrides))
+
+    def test_good_fields_pass(self):
+        self.assertEqual(self.gate(), (True, None, 0.0))
+
+    def test_missing_or_blank(self):
+        for name in gates.GETTING_STARTED_FIELDS:
+            for value in (None, "", "   \n", ["- A laptop"]):
+                passed, reason, _ = self.gate(**{name: value})
+                self.assertFalse(passed, (name, value))
+                self.assertEqual(reason, f"missing_field: {name}")
+
+    def test_length_boundaries(self):
+        low, high = gates.GETTING_STARTED_LEN
+        self.assertEqual(low, 30)
+        for name in gates.GETTING_STARTED_FIELDS:
+            self.assertTrue(self.gate(**{name: "x" * low})[0])
+            self.assertTrue(self.gate(**{name: "x" * high})[0])
+            self.assertEqual(self.gate(**{name: "x" * (low - 1)})[1], f"out_of_range: {name} length 29 not in 30..3000")
+            self.assertFalse(self.gate(**{name: "x" * (high + 1)})[0])
+            self.assertFalse(self.gate(**{name: f"  {'x' * (low - 1)}  "})[0])
+
+    def test_both_reported(self):
+        passed, reason, _ = self.gate(what_youll_need=None, how_to_begin="1. Start")
+        self.assertFalse(passed)
+        self.assertEqual(reason, "missing_field: what_youll_need; out_of_range: how_to_begin length 8 not in 30..3000")
+
+    def test_evaluate_static_reports_getting_started_gate(self):
+        row = SimpleNamespace(is_valid_idea="true", rescoped_version=None, extracted_title=GOOD["title"],
+                              **{k: v for k, v in GOOD.items() if k not in ("title", "how_to_begin")}, how_to_begin=None,
+                              raw_title="Ask HN", raw_text=SOURCE_TEXT, source_url="https://news.ycombinator.com/item?id=1",
+                              source="hackernews", confidence_flag=None, source_date=None)
+        failures, _, _ = gates.evaluate_static(row, NOW)
+        self.assertEqual(failures, [{"gate": "getting_started", "reason": "missing_field: how_to_begin"}])
 
     def test_all_problems_reported(self):
         passed, reason, score = gates.gate_structure(fields(title=None, difficulty_estimate="expert", learning_outcomes=[]))
@@ -271,8 +306,15 @@ class EffectiveFieldsTests(unittest.TestCase):
     def test_needs_rescope_uses_rescoped_version(self):
         effective = gates.effective_fields(self.row(is_valid_idea="needs_rescope", rescoped_version={"title": "Smaller"}))
         self.assertEqual(effective["title"], "Smaller")
-        self.assertIsNone(effective["what_youll_need"])
         self.assertIsNone(gates.effective_fields(self.row(is_valid_idea="needs_rescope"))["title"])
+
+    def test_getting_started_from_columns_with_rescoped_fallback(self):
+        rescoped = {"title": "Smaller", "what_youll_need": "rw", "how_to_begin": "rh"}
+        self.assertEqual(gates.effective_fields(self.row(is_valid_idea="needs_rescope", rescoped_version=rescoped))["what_youll_need"], "w")
+        fallback = gates.effective_fields(self.row(is_valid_idea="needs_rescope", rescoped_version=rescoped, what_youll_need=None, how_to_begin=None))
+        self.assertEqual((fallback["what_youll_need"], fallback["how_to_begin"]), ("rw", "rh"))
+        valid = gates.effective_fields(self.row(rescoped_version=rescoped, what_youll_need=None))
+        self.assertEqual((valid["what_youll_need"], valid["how_to_begin"]), (None, "h"))
 
 # --- stage tests on the test branch ---
 
@@ -299,6 +341,8 @@ class GateStageTests(RolledBackTestCase):
             "learning_outcomes": brief.get("learning_outcomes", GOOD["learning_outcomes"]),
             "suggested_tech_stack": brief.get("suggested_tech_stack", GOOD["suggested_tech_stack"]),
             "difficulty_estimate": brief.get("difficulty_estimate", GOOD["difficulty_estimate"]),
+            "what_youll_need": brief.get("what_youll_need", GOOD["what_youll_need"]),
+            "how_to_begin": brief.get("how_to_begin", GOOD["how_to_begin"]),
         }
         values.update(overrides)
         row = RawIdea(**values)
@@ -398,6 +442,25 @@ class GateStageTests(RolledBackTestCase):
         bad = self.row(bad_id)
         self.assertEqual((bad["gate_status"], bad["gate_failures"]), ("failed", [{"gate": "structure", "reason": "bad_difficulty: 'expert'"}]))
 
+    def test_missing_getting_started_is_blocked(self):
+        missing_id = self.make_row(brief={"how_to_begin": None})
+        short_id = self.make_row(brief={"title": "Bouldering wall setter notes board", "what_youll_need": "- A laptop"})
+        rescoped = {k: GOOD[k] for k in ("title", "problem_summary", "target_user", "suggested_features", "learning_outcomes",
+                                         "suggested_tech_stack", "difficulty_estimate")}
+        rescope_id = self.make_row(is_valid_idea="needs_rescope", rescoped_version=rescoped, what_youll_need=None, how_to_begin=None)
+        embed = FakeEmbed()
+
+        summary = self.run_gates(embed)
+
+        self.assertEqual((summary["examined"], summary["failed"], summary["passed"]), (3, 3, 0))
+        self.assertEqual(self.row(missing_id)["gate_failures"], [{"gate": "getting_started", "reason": "missing_field: how_to_begin"}])
+        self.assertEqual(self.row(short_id)["gate_failures"],
+                         [{"gate": "getting_started", "reason": "out_of_range: what_youll_need length 10 not in 30..3000"}])
+        self.assertEqual(self.row(rescope_id)["gate_failures"],
+                         [{"gate": "getting_started", "reason": "missing_field: what_youll_need; missing_field: how_to_begin"}])
+        self.assertEqual({self.row(i)["gate_status"] for i in (missing_id, short_id, rescope_id)}, {"failed"})
+        self.assertEqual(embed.calls, [])
+
     def test_stored_embedding_is_reused(self):
         row_id = self.make_row(embedding=list(unit(3)))
         embed = FakeEmbed()
@@ -436,7 +499,10 @@ class GateStageTests(RolledBackTestCase):
         self.assertEqual([self.row(i)["gate_status"] for i in ids], ["passed", "passed", "pending"])
 
 class PublishedCalibrationTests(RolledBackTestCase):
-    """Every published raw idea must pass every gate (each excluded from its own duplicate comparison)."""
+    """
+    Every published raw idea must pass every gate (each excluded from its own duplicate comparison). Getting Started
+    is checked on the brief's own text; briefs still waiting for the Getting Started backfill may only fail that gate.
+    """
 
     def test_published_briefs_pass_all_gates(self):
         rows = self.db.query(RawIdea).filter(RawIdea.published_brief_id.isnot(None)).order_by(RawIdea.id).all()
@@ -445,7 +511,11 @@ class PublishedCalibrationTests(RolledBackTestCase):
         briefs = {b.raw_idea_id: b for b in self.db.query(Brief).filter(Brief.raw_idea_id.in_([r.id for r in rows]))}
         for row in rows:
             row.embedding = briefs[row.id].embedding  # the brief embedding is the same title+problem text
+            row.what_youll_need, row.how_to_begin = briefs[row.id].what_youll_need, briefs[row.id].how_to_begin
         self.db.commit()
+        awaiting = {row.id for row in rows if not gates.gate_getting_started(gates.effective_fields(row))[0]}
+        if awaiting:
+            print("\npublished briefs awaiting the Getting Started backfill:", sorted(briefs[i].id for i in awaiting))
         embed = FakeEmbed(error=AssertionError("embedding API must not be called"))
 
         summary = gates.gate_rows(self.db, rows, embed, deadline=float("inf"))
@@ -454,8 +524,10 @@ class PublishedCalibrationTests(RolledBackTestCase):
         duplicates = [(r.id, r.gate_failures) for r in outcomes if r.gate_status == "duplicate"]
         if duplicates:
             print("\npublished duplicates of each other:", duplicates)
-        self.assertEqual([(r.id, r.gate_failures) for r in outcomes if r.gate_status != "passed"], [])
-        self.assertEqual(summary["passed"], len(rows))
+        self.assertEqual([(r.id, r.gate_failures) for r in outcomes if r.gate_status != "passed" and r.id not in awaiting], [])
+        self.assertEqual({r.id: [f["gate"] for f in r.gate_failures] for r in outcomes if r.id in awaiting},
+                         {i: ["getting_started"] for i in awaiting})
+        self.assertEqual(summary["passed"], len(rows) - len(awaiting))
 
 if __name__ == "__main__":
     unittest.main()
