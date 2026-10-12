@@ -35,7 +35,7 @@ def get_briefs(response: Response, difficulty: Optional[str] = Query(None), tag:
         for b in briefs
     ]
 
-@router.get("/{brief_id}")
+@router.get("/{brief_id:int}")
 def get_brief(brief_id: int, db: Session = Depends(get_db)):
     brief = get_brief_by_id(db, brief_id)
     if not brief:
