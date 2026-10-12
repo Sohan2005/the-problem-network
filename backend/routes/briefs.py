@@ -14,8 +14,8 @@ def get_stats(db: Session = Depends(get_db)):
     return get_brief_stats(db)
 
 @router.get("/")
-def get_briefs(difficulty: Optional[str] = Query(None), tag: Optional[str] = Query(None), search: Optional[str] = Query(None), sort: Optional[str] = Query(None), db: Session = Depends(get_db)):
-    briefs = list_briefs(db, difficulty=difficulty, tag=tag, search=search, sort=sort)
+def get_briefs(difficulty: Optional[str] = Query(None), tag: Optional[str] = Query(None), search: Optional[str] = Query(None), sort: Optional[str] = Query(None), limit: int = Query(200, ge=1, le=500), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
+    briefs = list_briefs(db, difficulty=difficulty, tag=tag, search=search, sort=sort, limit=limit, offset=offset)
     marked = {
         brief_id for (brief_id,) in db.query(Brief.id).join(RawIdea, RawIdea.id == Brief.raw_idea_id)
         .filter(RawIdea.source.in_(AI_SOURCES), Brief.id.in_([b.id for b in briefs]))

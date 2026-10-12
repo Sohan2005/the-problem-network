@@ -2,7 +2,7 @@ import html
 import re
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import Optional
 
 def create_problem(db: Session, source: str, title: str, body: str, source_url: str):
     from .models import Problem
@@ -45,8 +45,12 @@ def get_problem_by_url(db: Session, source_url: str):
     from .models import Problem
     return db.query(Problem).filter(Problem.source_url == source_url).first()
 
-def list_briefs(db: Session, difficulty: Optional[str] = None, tag: Optional[str] = None, search: Optional[str] = None, sort: Optional[str] = None):
-    from .models import Brief, Tag
+DEFAULT_BRIEF_LIMIT = 200
+MAX_BRIEF_LIMIT = 500
+
+
+def list_briefs(db: Session, difficulty: Optional[str] = None, tag: Optional[str] = None, search: Optional[str] = None, sort: Optional[str] = None, limit: int = DEFAULT_BRIEF_LIMIT, offset: int = 0):
+    from .models import Brief
     from sqlalchemy import or_, case, func
     
     query = db.query(Brief)
@@ -71,31 +75,34 @@ def list_briefs(db: Session, difficulty: Optional[str] = None, tag: Optional[str
             )
         )
     
-    # Sort by difficulty
+    # Stable order: the requested sort, then id, so limit/offset pages do not shuffle.
     difficulty_level = func.lower(Brief.difficulty)
     if sort == "difficulty_asc":
-        query = query.order_by(
+        ordering = (
             case(
                 (difficulty_level == "beginner", 1),
                 (difficulty_level == "intermediate", 2),
                 (difficulty_level == "advanced", 3),
                 else_=4
-            )
+            ),
+            Brief.id.asc(),
         )
     elif sort == "difficulty_desc":
-        query = query.order_by(
+        ordering = (
             case(
                 (difficulty_level == "advanced", 1),
                 (difficulty_level == "intermediate", 2),
                 (difficulty_level == "beginner", 3),
                 else_=4
-            )
+            ),
+            Brief.id.desc(),
         )
     else:
-        # Default: most recent (by created_at)
-        query = query.order_by(Brief.created_at.desc())
-    
-    return query.all()
+        ordering = (Brief.created_at.desc(), Brief.id.desc())
+
+    bounded = min(max(int(limit), 1), MAX_BRIEF_LIMIT)
+    skipped = max(int(offset), 0)
+    return query.order_by(*ordering).limit(bounded).offset(skipped).all()
 
 def get_brief_by_id(db: Session, brief_id: int):
     from .models import Brief
