@@ -33,6 +33,9 @@ def create_app() -> FastAPI:
         allow_headers=_ALLOWED_HEADERS,
     )
     app.include_router(briefs_router)
+    if os.getenv("ENABLE_ADMIN_ROUTES") == "1":
+        from routes.admin import router as admin_router
+        app.include_router(admin_router)
 
     @app.get("/health")
     def health():
