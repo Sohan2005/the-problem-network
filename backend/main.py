@@ -18,10 +18,14 @@ def allowed_origins() -> list[str]:
 
 
 def create_app() -> FastAPI:
+    docs_enabled = os.getenv("ENABLE_DOCS") == "1"
     app = FastAPI(
         title="The Problem Network API",
         description="Translates real-world technical problems into structured, junior-dev-friendly briefs.",
         version="0.1.0",
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
     )
     origin_regex = os.getenv("ALLOWED_ORIGIN_REGEX") or None
     app.add_middleware(
