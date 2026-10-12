@@ -3,6 +3,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from rate_limit import GetRateLimitMiddleware
 from routes.briefs import router as briefs_router
 
 _DEFAULT_ORIGIN = "http://localhost:3000"
@@ -28,6 +29,7 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json" if docs_enabled else None,
     )
     origin_regex = os.getenv("ALLOWED_ORIGIN_REGEX") or None
+    app.add_middleware(GetRateLimitMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins(),
