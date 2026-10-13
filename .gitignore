@@ -82,3 +82,7 @@ backend/confirm_briefs.py
 backend/export_approved_ideas.py
 backend/review_web_grounding.py
 backend/within_batch_dedup.py
+
+
+*.zip
+tpn-logs*/
