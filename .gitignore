@@ -86,3 +86,26 @@ backend/within_batch_dedup.py
 
 *.zip
 tpn-logs*/
+
+*.pem
+*.key
+*.pfx
+*.p12
+*.publishsettings
+*.PublishSettings
+*.pub-settings
+**/local.settings.json
+credentials*.json
+service-account*.json
+.vercel/
+.azure/
+*.sqlite3
+venv/
+.venv/
+node_modules/
+.next/
+*.log
+terraform.tfstate*
+
+.cursor/
+!.env.example
