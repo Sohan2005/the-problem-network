@@ -47,13 +47,20 @@ def get_problem_by_url(db: Session, source_url: str):
 
 DEFAULT_BRIEF_LIMIT = 200
 MAX_BRIEF_LIMIT = 500
+# Never add embedding here: it is about 39 KB per brief and the API does not return it.
+LIST_COLUMNS = ("id", "title", "difficulty", "core_task", "recommended_stack")
+DETAIL_COLUMNS = LIST_COLUMNS + ("target_user", "suggested_features", "learning_outcomes", "what_youll_need", "how_to_begin")
 
 
 def list_briefs(db: Session, difficulty: Optional[str] = None, tag: Optional[str] = None, search: Optional[str] = None, sort: Optional[str] = None, limit: int = DEFAULT_BRIEF_LIMIT, offset: int = 0):
-    from .models import Brief
+    """Rows with LIST_COLUMNS plus raw_source (the linked raw idea's source, None without one)."""
+    from .models import Brief, RawIdea
     from sqlalchemy import or_, case, func
     
-    query = db.query(Brief)
+    query = (
+        db.query(*(getattr(Brief, name) for name in LIST_COLUMNS), RawIdea.source.label("raw_source"))
+        .outerjoin(RawIdea, RawIdea.id == Brief.raw_idea_id)
+    )
     
     if difficulty:
         query = query.filter(Brief.difficulty == difficulty.lower())
@@ -105,8 +112,23 @@ def list_briefs(db: Session, difficulty: Optional[str] = None, tag: Optional[str
     return query.order_by(*ordering).limit(bounded).offset(skipped).all()
 
 def get_brief_by_id(db: Session, brief_id: int):
-    from .models import Brief
-    return db.query(Brief).filter(Brief.id == brief_id).first()
+    """Row with DETAIL_COLUMNS plus the source and URL of the linked problem and raw idea (None when not linked)."""
+    from .models import Brief, Problem, RawIdea
+    return (
+        db.query(
+            *(getattr(Brief, name) for name in DETAIL_COLUMNS),
+            Problem.source.label("problem_source"), Problem.source_url.label("problem_url"),
+            RawIdea.source.label("raw_source"), RawIdea.source_url.label("raw_url"),
+        )
+        .outerjoin(Problem, Problem.id == Brief.problem_id)
+        .outerjoin(RawIdea, RawIdea.id == Brief.raw_idea_id)
+        .filter(Brief.id == brief_id)
+        .first()
+    )
+
+def get_brief_tags(db: Session, brief_id: int) -> list:
+    from .models import Tag, brief_tags
+    return [name for (name,) in db.query(Tag.name).join(brief_tags, brief_tags.c.tag_id == Tag.id).filter(brief_tags.c.brief_id == brief_id)]
 
 def get_brief_stats(db: Session):
     """Get brief statistics: total count, count added in last 7 days, last updated timestamp"""

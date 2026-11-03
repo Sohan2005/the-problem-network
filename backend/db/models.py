@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, Date, ForeignKey, Table, Boolean, JSON, Float, Numeric, CheckConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import relationship, declarative_base
+from sqlalchemy.orm import relationship, declarative_base, deferred
 from datetime import datetime
 from pgvector.sqlalchemy import Vector
 
@@ -42,7 +42,8 @@ class Brief(Base):
     how_to_begin = Column(Text, nullable=True)  # First 2-4 actionable steps to start the project
     source_date = Column(DateTime, nullable=True)  # Original post date for age tracking
     created_at = Column(DateTime, default=datetime.utcnow)
-    embedding = Column(Vector(3072), nullable=True)  # Updated to 3072 for gemini-embedding-001
+    # Deferred (about 39 KB per row as text): loaded only when the attribute is read or the column is selected.
+    embedding = deferred(Column(Vector(3072), nullable=True))  # Updated to 3072 for gemini-embedding-001
     
     problem = relationship("Problem", back_populates="brief")
     raw_idea = relationship("RawIdea", foreign_keys=[raw_idea_id])
@@ -106,7 +107,7 @@ class RawIdea(Base):
     learning_outcomes = Column(JSON, nullable=True)  # list of strings
     what_youll_need = Column(Text, nullable=True)  # Prerequisites for Getting Started
     how_to_begin = Column(Text, nullable=True)  # First steps for Getting Started
-    embedding = Column(Vector(3072), nullable=True)  # Updated to 3072 for gemini-embedding-001
+    embedding = deferred(Column(Vector(3072), nullable=True))  # Updated to 3072 for gemini-embedding-001
     # Pipeline state (migration 001_pipeline_state.sql)
     canonical_url = Column(Text, nullable=True, unique=True)
     extraction_attempts = Column(Integer, nullable=False, default=0, server_default="0")

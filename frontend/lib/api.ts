@@ -12,11 +12,11 @@ export interface Brief {
   difficulty: string;
   core_task: string;
   recommended_stack: string[] | null;
-  tags: string[];
   has_title_mark?: boolean;
 }
 
 export interface BriefDetail extends Brief {
+  tags: string[];
   target_user: string | null;
   suggested_features: string[] | null;
   learning_outcomes: string[] | null;
