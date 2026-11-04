@@ -112,23 +112,22 @@ def list_briefs(db: Session, difficulty: Optional[str] = None, tag: Optional[str
     return query.order_by(*ordering).limit(bounded).offset(skipped).all()
 
 def get_brief_by_id(db: Session, brief_id: int):
-    """Row with DETAIL_COLUMNS plus the source and URL of the linked problem and raw idea (None when not linked)."""
+    """
+    The Brief with DETAIL_COLUMNS and its link ids. brief.problem, brief.raw_idea and brief.tags stay lazy: the problems
+    table is only queried for briefs with a problem_id, and the linked rows load source and source_url only.
+    """
+    from sqlalchemy.orm import lazyload, load_only
     from .models import Brief, Problem, RawIdea
     return (
-        db.query(
-            *(getattr(Brief, name) for name in DETAIL_COLUMNS),
-            Problem.source.label("problem_source"), Problem.source_url.label("problem_url"),
-            RawIdea.source.label("raw_source"), RawIdea.source_url.label("raw_url"),
+        db.query(Brief)
+        .options(
+            load_only(*(getattr(Brief, name) for name in DETAIL_COLUMNS), Brief.problem_id, Brief.raw_idea_id),
+            lazyload(Brief.problem).load_only(Problem.source, Problem.source_url),
+            lazyload(Brief.raw_idea).load_only(RawIdea.source, RawIdea.source_url),
         )
-        .outerjoin(Problem, Problem.id == Brief.problem_id)
-        .outerjoin(RawIdea, RawIdea.id == Brief.raw_idea_id)
         .filter(Brief.id == brief_id)
         .first()
     )
-
-def get_brief_tags(db: Session, brief_id: int) -> list:
-    from .models import Tag, brief_tags
-    return [name for (name,) in db.query(Tag.name).join(brief_tags, brief_tags.c.tag_id == Tag.id).filter(brief_tags.c.brief_id == brief_id)]
 
 def get_brief_stats(db: Session):
     """Get brief statistics: total count, count added in last 7 days, last updated timestamp"""

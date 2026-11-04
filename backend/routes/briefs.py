@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 from typing import Optional
 from db.database import get_db
-from db.queries import list_briefs, get_brief_by_id, get_brief_stats, get_brief_tags
+from db.queries import list_briefs, get_brief_by_id, get_brief_stats
 from pipeline.publish import AI_SOURCES, source_link
 
 router = APIRouter(prefix="/briefs")
@@ -93,10 +93,7 @@ def brief_detail(db: Session, brief_id: int) -> Optional[dict]:
     brief = get_brief_by_id(db, brief_id)
     if not brief:
         return None
-    if brief.problem_source is not None:
-        source, url = brief.problem_source, brief.problem_url
-    else:
-        source, url = brief.raw_source, brief.raw_url
+    source = brief.problem or brief.raw_idea
     return {
         "id": brief.id,
         "title": brief.title,
@@ -108,8 +105,8 @@ def brief_detail(db: Session, brief_id: int) -> Optional[dict]:
         "learning_outcomes": brief.learning_outcomes,
         "what_youll_need": brief.what_youll_need,
         "how_to_begin": brief.how_to_begin,
-        "tags": get_brief_tags(db, brief_id),
-        "source_url": source_link(source, url),
-        "source_platform": source,
-        "has_title_mark": brief.raw_source in AI_SOURCES,
+        "tags": [t.name for t in brief.tags],
+        "source_url": source_link(source.source, source.source_url) if source else None,
+        "source_platform": source.source if source else None,
+        "has_title_mark": brief.raw_idea is not None and brief.raw_idea.source in AI_SOURCES,
     }

@@ -8,10 +8,10 @@ from unittest import mock
 os.environ.setdefault("DATABASE_URL", "postgresql://invalid:invalid@127.0.0.1:1/none")
 
 from fastapi.testclient import TestClient
-from sqlalchemy import inspect
+from sqlalchemy import event, inspect, text
 
-from db.models import Brief, RawIdea, Tag, brief_tags
-from db.queries import canonicalize_url, get_brief_by_id, get_brief_tags, list_briefs
+from db.models import Brief, Problem, RawIdea, Tag, brief_tags
+from db.queries import canonicalize_url, get_brief_by_id, list_briefs
 from main import create_app
 from routes import briefs as briefs_routes
 from routes.briefs import TTLCache, get_db
@@ -54,7 +54,7 @@ def detail_row(**overrides):
         "id": 7, "title": "Route tracker", "difficulty": "beginner", "core_task": "Climbers lose track.",
         "recommended_stack": ["Python"], "target_user": "Climbers", "suggested_features": ["Log"],
         "learning_outcomes": ["SQL"], "what_youll_need": "- Python", "how_to_begin": "1. Start",
-        "problem_source": None, "problem_url": None, "raw_source": None, "raw_url": None,
+        "problem": None, "raw_idea": None, "tags": [],
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -179,8 +179,7 @@ class ListBriefsTests(unittest.TestCase):
             stats = client.get("/briefs/stats")
         self.assertEqual(stats.status_code, 200)
         self.assertEqual(stats.headers.get("cache-control"), CACHE_CONTROL)
-        with mock.patch("routes.briefs.get_brief_by_id", return_value=detail_row()), \
-                mock.patch("routes.briefs.get_brief_tags", return_value=[]):
+        with mock.patch("routes.briefs.get_brief_by_id", return_value=detail_row()):
             detail = client.get("/briefs/7")
         self.assertEqual(detail.headers.get("cache-control"), CACHE_CONTROL)
         with mock.patch("routes.briefs.get_brief_by_id", return_value=None):
@@ -201,22 +200,22 @@ class BriefRouteTests(unittest.TestCase):
 
     def test_detail_links_real_sources_and_returns_tags(self):
         url = "https://news.ycombinator.com/item?id=1"
-        with mock.patch("routes.briefs.get_brief_by_id", return_value=detail_row(raw_source="hackernews", raw_url=url)), \
-                mock.patch("routes.briefs.get_brief_tags", return_value=["python"]) as tags:
+        row = detail_row(raw_idea=SimpleNamespace(source="hackernews", source_url=url), tags=[SimpleNamespace(name="python")])
+        with mock.patch("routes.briefs.get_brief_by_id", return_value=row):
             body = fake_db_client().get("/briefs/7").json()
-        tags.assert_called_once_with(mock.ANY, 7)
         self.assertEqual((body["source_url"], body["source_platform"], body["tags"], body["has_title_mark"]),
                          (url, "hackernews", ["python"], False))
         self.assertEqual(body["how_to_begin"], "1. Start")
 
     def test_detail_hides_ai_links_and_prefers_problem_source(self):
-        with mock.patch("routes.briefs.get_brief_by_id", return_value=detail_row(raw_source="ai_suggested", raw_url="https://ai.example")), \
-                mock.patch("routes.briefs.get_brief_tags", return_value=[]):
+        ai_row = detail_row(raw_idea=SimpleNamespace(source="ai_suggested", source_url="https://ai.example"))
+        with mock.patch("routes.briefs.get_brief_by_id", return_value=ai_row):
             ai = fake_db_client().get("/briefs/7").json()
         self.assertEqual((ai["source_url"], ai["source_platform"], ai["has_title_mark"]), (None, "ai_suggested", True))
         problem_url = "https://softwarerecs.stackexchange.com/q/1"
-        row = detail_row(problem_source="stackexchange_softwarerecs", problem_url=problem_url, raw_source="hackernews", raw_url="https://x")
-        with mock.patch("routes.briefs.get_brief_by_id", return_value=row), mock.patch("routes.briefs.get_brief_tags", return_value=[]):
+        row = detail_row(problem=SimpleNamespace(source="stackexchange_softwarerecs", source_url=problem_url),
+                         raw_idea=SimpleNamespace(source="hackernews", source_url="https://x"))
+        with mock.patch("routes.briefs.get_brief_by_id", return_value=row):
             legacy = fake_db_client().get("/briefs/7").json()
         self.assertEqual((legacy["source_url"], legacy["source_platform"]), (problem_url, "stackexchange_softwarerecs"))
 
@@ -236,11 +235,10 @@ class ResponseCacheTests(unittest.TestCase):
 
     def test_detail_and_stats_are_cached_but_not_found_is_not(self):
         client = fake_db_client()
-        with mock.patch("routes.briefs.get_brief_by_id", return_value=detail_row()) as found, \
-                mock.patch("routes.briefs.get_brief_tags", return_value=[]) as tags:
+        with mock.patch("routes.briefs.get_brief_by_id", return_value=detail_row()) as found:
             first, second = client.get("/briefs/7").json(), client.get("/briefs/7").json()
         self.assertEqual(first, second)
-        self.assertEqual((found.call_count, tags.call_count), (1, 1))
+        self.assertEqual(found.call_count, 1)
         with mock.patch("routes.briefs.get_brief_by_id", return_value=None) as missing:
             self.assertEqual([client.get("/briefs/8").status_code for _ in range(2)], [404, 404])
         self.assertEqual(missing.call_count, 2)
@@ -274,7 +272,7 @@ class ResponseCacheTests(unittest.TestCase):
 
 
 class BriefQueryBranchTests(RolledBackTestCase):
-    """The API queries on the test branch: explicit columns, no embedding, source through the outer join."""
+    """The API queries on the test branch: the list selects explicit columns, the detail loads no embedding."""
 
     def setUp(self):
         super().setUp()
@@ -305,12 +303,13 @@ class BriefQueryBranchTests(RolledBackTestCase):
         self.assertEqual([(row.id, row.raw_source) for row in rows], [(self.real.id, "hackernews"), (self.ai.id, "ai_suggested")])
         self.assertNotIn("embedding", rows[0]._fields)
 
-    def test_detail_row_and_tags(self):
-        row = get_brief_by_id(self.db, self.real.id)
-        self.assertEqual((row.raw_source, row.raw_url, row.problem_source, row.how_to_begin), ("hackernews", self.real.url, None, "1. Start"))
-        self.assertNotIn("embedding", row._fields)
-        self.assertEqual(get_brief_tags(self.db, self.real.id), [self.tag])
-        self.assertEqual(get_brief_tags(self.db, self.ai.id), [])
+    def test_detail_loads_only_needed_columns(self):
+        brief = get_brief_by_id(self.db, self.real.id)
+        self.assertEqual((brief.how_to_begin, brief.raw_idea.source, brief.raw_idea.source_url), ("1. Start", "hackernews", self.real.url))
+        self.assertIn("embedding", inspect(brief).unloaded)
+        self.assertTrue({"embedding", "raw_text"} <= inspect(brief.raw_idea).unloaded)
+        self.assertEqual([t.name for t in brief.tags], [self.tag])
+        self.assertIsNone(brief.problem)
         self.assertIsNone(get_brief_by_id(self.db, -1))
 
     def test_embeddings_are_deferred_but_still_load_on_access(self):
@@ -319,6 +318,107 @@ class BriefQueryBranchTests(RolledBackTestCase):
         self.assertIn("embedding", inspect(brief).unloaded)
         self.assertIn("embedding", inspect(raw).unloaded)
         self.assertEqual((len(brief.embedding), len(raw.embedding)), (3072, 3072))
+
+
+class DetailRouteBranchTests(RolledBackTestCase):
+    """
+    Regression for the detail 500 after the egress deploy: GET /briefs/{id} for every brief shape on the test branch.
+    No embedding is selected and the problems table is only queried for briefs that have a problem_id.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.statements = []
+        event.listen(self.conn, "before_cursor_execute", self.record)
+        self.tag = f"detail-{uuid.uuid4().hex[:12]}"
+        self.shapes = {
+            "raw": self.brief(raw=self.raw_idea("hackernews")),
+            "ai": self.brief(raw=self.raw_idea("ai_suggested")),
+            "problem": self.brief(problem=self.problem("stackexchange_softwarerecs")),
+            "problem_and_raw": self.brief(problem=self.problem("github"), raw=self.raw_idea("ai_suggested")),
+            "no_links": self.brief(),
+        }
+        tag = Tag(name=self.tag)
+        self.db.add(tag)
+        self.db.flush()
+        self.db.execute(brief_tags.insert().values(brief_id=self.shapes["raw"].id, tag_id=tag.id))
+        self.db.commit()
+        app = build_app()
+        app.dependency_overrides[get_db] = lambda: self.db
+        self.client = TestClient(app)
+
+    def tearDown(self):
+        event.remove(self.conn, "before_cursor_execute", self.record)
+        briefs_routes.cache.clear()
+        super().tearDown()
+
+    def record(self, conn, cursor, statement, parameters, context, executemany):
+        self.statements.append(statement)
+
+    def url(self):
+        return f"https://news.ycombinator.com/item?id={uuid.uuid4().int % 10**9}"
+
+    def raw_idea(self, source):
+        url = self.url()
+        row = RawIdea(source=source, source_url=url, canonical_url=canonicalize_url(url), raw_title="Ask HN",
+                      raw_text="text", embedding=[0.5] * 3072)
+        self.db.add(row)
+        self.db.flush()
+        return SimpleNamespace(id=row.id, url=url)
+
+    def problem(self, source):
+        url = self.url()
+        row = Problem(source=source, source_url=url, raw_text="text", embedding=[0.5] * 3072)
+        self.db.add(row)
+        self.db.flush()
+        return SimpleNamespace(id=row.id, url=url)
+
+    def brief(self, raw=None, problem=None):
+        row = Brief(title="Shape", difficulty="beginner", core_task="Core task", recommended_stack=["Python"],
+                    raw_idea_id=raw and raw.id, problem_id=problem and problem.id, embedding=[0.5] * 3072)
+        self.db.add(row)
+        self.db.flush()
+        return SimpleNamespace(id=row.id, raw=raw, problem=problem)
+
+    def get(self, shape):
+        briefs_routes.cache.clear()
+        self.db.expunge_all()
+        self.statements.clear()
+        response = self.client.get(f"/briefs/{self.shapes[shape].id}")
+        self.db.rollback()
+        self.assertEqual(response.status_code, 200, shape)
+        selects = [s.lower() for s in self.statements if s.lstrip().lower().startswith("select")]
+        self.assertFalse([s for s in selects if "embedding" in s], f"{shape}: embedding selected")
+        return response.json(), any("problems" in s for s in selects)
+
+    def test_every_shape(self):
+        shapes = self.shapes
+        expected = {
+            "raw": ("hackernews", shapes["raw"].raw.url, False, [self.tag], False),
+            "ai": ("ai_suggested", None, True, [], False),
+            "problem": ("stackexchange_softwarerecs", shapes["problem"].problem.url, False, [], True),
+            "problem_and_raw": ("github", None, True, [], True),
+            "no_links": (None, None, False, [], False),
+        }
+        for shape, want in expected.items():
+            body, problems_queried = self.get(shape)
+            got = (body["source_platform"], body["source_url"], body["has_title_mark"], body["tags"], problems_queried)
+            self.assertEqual(got, want, shape)
+            self.assertEqual((body["id"], body["core_task"], body["recommended_stack"]), (shapes[shape].id, "Core task", ["Python"]))
+
+    def test_briefs_without_problem_link_survive_an_unusable_problems_table(self):
+        """The 7156747 detail query joined problems for every brief and failed with UndefinedTable/UndefinedColumn here."""
+        for ddl in ("ALTER TABLE problems RENAME TO problems_hidden_for_test",
+                    "ALTER TABLE problems RENAME COLUMN source TO source_hidden_for_test"):
+            hidden = self.conn.begin_nested()
+            self.conn.execute(text(ddl))
+            try:
+                for shape in ("raw", "ai", "no_links"):
+                    body, problems_queried = self.get(shape)
+                    self.assertFalse(problems_queried, shape)
+                    self.assertEqual(body["id"], self.shapes[shape].id)
+            finally:
+                hidden.rollback()
 
 
 class RateLimitTests(unittest.TestCase):
