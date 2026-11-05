@@ -38,8 +38,9 @@ def build_app(**env):
 
 
 def fake_db_client():
-    """Test client with a fake session and an empty response cache."""
+    """Test client with a fake session and empty caches."""
     briefs_routes.cache.clear()
+    briefs_routes.snapshot_cache.clear()
     app = build_app()
 
     def fake_db():
@@ -269,6 +270,61 @@ class ResponseCacheTests(unittest.TestCase):
 
     def test_production_limits(self):
         self.assertEqual((briefs_routes.CACHE_TTL_SECONDS, briefs_routes.CACHE_MAX_ENTRIES), (1800, 256))
+        self.assertEqual((briefs_routes.SNAPSHOT_TTL_SECONDS, briefs_routes.REFRESH_RETRY_SECONDS), (3600, 300))
+
+
+class StaleWhileRefreshCacheTests(unittest.TestCase):
+    def setUp(self):
+        self.now = [0.0]
+        self.spawned = []
+        self.cache = briefs_routes.StaleWhileRefreshCache(ttl_seconds=3600, retry_seconds=300,
+                                                          clock=lambda: self.now[0], spawn=self.spawned.append)
+
+    def test_missing_value_is_computed_in_the_request_and_fresh_hits_start_nothing(self):
+        background = mock.Mock(return_value="new")
+        self.assertEqual(self.cache.get("k", lambda: "first", background), "first")
+        self.now[0] = 3599.0
+        self.assertEqual(self.cache.get("k", lambda: "unused", background), "first")
+        self.assertEqual(self.spawned, [])
+
+    def test_stale_value_is_served_while_one_background_refresh_runs(self):
+        self.cache.get("a", lambda: "a1", None)
+        self.cache.get("b", lambda: "b1", None)
+        self.now[0] = 3600.0
+        self.assertEqual(self.cache.get("a", None, lambda: "a2"), "a1")
+        self.assertEqual(self.cache.get("a", None, lambda: "a3"), "a1")
+        self.assertEqual(self.cache.get("b", None, lambda: "b2"), "b1")
+        self.assertEqual(len(self.spawned), 1)
+        self.spawned.pop()()
+        self.assertEqual(self.cache.get("a", None, None), "a2")
+        self.assertEqual(self.cache.get("b", None, lambda: "b2"), "b1")
+        self.assertEqual(len(self.spawned), 1)
+        self.spawned.pop()()
+        self.assertEqual(self.cache.get("b", None, None), "b2")
+
+    def test_failed_refresh_keeps_the_old_value_and_retries_later(self):
+        self.cache.get("k", lambda: "old", None)
+        self.now[0] = 3600.0
+
+        def fail():
+            raise RuntimeError("database unavailable")
+
+        self.assertEqual(self.cache.get("k", None, fail), "old")
+        with self.assertLogs(level="WARNING"):
+            self.spawned.pop()()
+        self.now[0] = 3899.0
+        self.assertEqual(self.cache.get("k", None, lambda: "new"), "old")
+        self.assertEqual(self.spawned, [])
+        self.now[0] = 3900.0
+        self.cache.get("k", None, lambda: "new")
+        self.spawned.pop()()
+        self.assertEqual(self.cache.get("k", None, None), "new")
+
+    def test_background_refresh_uses_its_own_session(self):
+        session = mock.Mock()
+        with mock.patch("routes.briefs.SessionLocal", return_value=session):
+            self.assertEqual(briefs_routes.in_new_session(lambda db: db)(), session)
+        session.close.assert_called_once()
 
 
 class SearchTests(unittest.TestCase):

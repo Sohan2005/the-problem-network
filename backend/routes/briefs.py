@@ -1,3 +1,4 @@
+import logging
 import threading
 import time
 from collections import OrderedDict
@@ -6,7 +7,7 @@ from typing import NamedTuple, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 from brief_search import matches_all, terms, words
-from db.database import get_db
+from db.database import SessionLocal, get_db
 from db.queries import list_all_briefs, get_brief_by_id, get_brief_stats
 from pipeline.publish import AI_SOURCES, source_link
 
@@ -15,6 +16,8 @@ router = APIRouter(prefix="/briefs")
 CACHE_TTL_SECONDS = 30 * 60
 CACHE_MAX_ENTRIES = 256
 CACHE_CONTROL = "public, max-age=300, s-maxage=1800, stale-while-revalidate=3600"
+SNAPSHOT_TTL_SECONDS = 60 * 60
+REFRESH_RETRY_SECONDS = 5 * 60
 
 
 class TTLCache:
@@ -55,18 +58,89 @@ class TTLCache:
         return len(self._entries)
 
 
+def start_daemon(task):
+    threading.Thread(target=task, daemon=True).start()
+
+
+class StaleWhileRefreshCache:
+    """
+    Process-local cache for values every request needs (the brief snapshot and stats). A missing value is computed in
+    the request. Once older than ttl_seconds the stored value is still returned while one background refresh replaces
+    it; no second refresh starts, for any key, until that one ends. A failed refresh keeps the old value and is retried
+    after retry_seconds.
+    """
+
+    def __init__(self, ttl_seconds: float = SNAPSHOT_TTL_SECONDS, retry_seconds: float = REFRESH_RETRY_SECONDS,
+                 clock=time.monotonic, spawn=start_daemon):
+        self.ttl = ttl_seconds
+        self.retry = retry_seconds
+        self.clock = clock
+        self.spawn = spawn
+        self._entries = {}
+        self._lock = threading.Lock()
+        self._refreshing = threading.Lock()
+
+    def get(self, key, compute_now, compute_in_background):
+        """The value for key: compute_now() when missing, else the stored value (starting a refresh when it is stale)."""
+        with self._lock:
+            entry = self._entries.get(key)
+        if entry is None:
+            value = compute_now()
+            self._store(key, value, self.ttl)
+            return value
+        if entry[0] <= self.clock() and self._refreshing.acquire(blocking=False):
+            try:
+                self.spawn(lambda: self._refresh(key, compute_in_background))
+            except Exception:
+                self._refreshing.release()
+                raise
+        return entry[1]
+
+    def _store(self, key, value, ttl):
+        with self._lock:
+            self._entries[key] = (self.clock() + ttl, value)
+
+    def _refresh(self, key, compute):
+        try:
+            self._store(key, compute(), self.ttl)
+        except Exception as exc:
+            logging.warning("background refresh of %s failed: %s", key[0], type(exc).__name__)
+            with self._lock:
+                entry = self._entries.get(key)
+                if entry is not None:
+                    self._entries[key] = (self.clock() + self.retry, entry[1])
+        finally:
+            self._refreshing.release()
+
+    def clear(self):
+        with self._lock:
+            self._entries.clear()
+
+
+def in_new_session(query):
+    """query(db) in its own session, for background refreshes that outlive the request's session."""
+    def run():
+        db = SessionLocal()
+        try:
+            return query(db)
+        finally:
+            db.close()
+    return run
+
+
 cache = TTLCache()
+snapshot_cache = StaleWhileRefreshCache()
 
 @router.get("/stats")
 def get_stats(response: Response, db: Session = Depends(get_db)):
     """Brief statistics: total count and last updated (recent_count is always None)"""
     response.headers["Cache-Control"] = CACHE_CONTROL
-    return cache.get_or_set(("stats",), lambda: get_brief_stats(db))
+    return snapshot_cache.get(("stats",), lambda: get_brief_stats(db), in_new_session(get_brief_stats))
 
 @router.get("/")
 def get_briefs(response: Response, difficulty: Optional[str] = Query(None), tag: Optional[str] = Query(None), search: Optional[str] = Query(None), sort: Optional[str] = Query(None), limit: int = Query(200, ge=1, le=500), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
     response.headers["Cache-Control"] = CACHE_CONTROL
-    entries = cache.get_or_set(SNAPSHOT_KEY, lambda: card_snapshot(db))
+    entries = snapshot_cache.get(SNAPSHOT_KEY, lambda: card_snapshot(db), in_new_session(card_snapshot))
     return select_cards(entries, difficulty=difficulty, tag=tag, search=search, sort=sort)[offset:offset + limit]
 
 SNAPSHOT_KEY = ("cards",)
