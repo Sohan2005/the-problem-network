@@ -59,7 +59,7 @@ cache = TTLCache()
 
 @router.get("/stats")
 def get_stats(response: Response, db: Session = Depends(get_db)):
-    """Get brief statistics: total count, recent count (7 days), last updated"""
+    """Brief statistics: total count and last updated (recent_count is always None)"""
     response.headers["Cache-Control"] = CACHE_CONTROL
     return cache.get_or_set(("stats",), lambda: get_brief_stats(db))
 

@@ -81,21 +81,19 @@ def get_brief_by_id(db: Session, brief_id: int):
     )
 
 def get_brief_stats(db: Session):
-    """Get brief statistics: total count, count added in last 7 days, last updated timestamp"""
+    """
+    Total brief count and last updated timestamp. recent_count is always None: the frontend no longer shows it, so it
+    is not queried; the key stays for frontends deployed before that change.
+    """
     from .models import Brief
-    from datetime import datetime, timedelta
     from sqlalchemy import func
     
     total_count = db.query(func.count(Brief.id)).scalar()
-    
-    seven_days_ago = datetime.utcnow() - timedelta(days=7)
-    recent_count = db.query(func.count(Brief.id)).filter(Brief.created_at >= seven_days_ago).scalar()
-    
     last_updated = db.query(func.max(Brief.created_at)).scalar()
     
     return {
         "total_count": total_count,
-        "recent_count": recent_count,
+        "recent_count": None,
         "last_updated": last_updated.isoformat() if last_updated else None
     }
 
