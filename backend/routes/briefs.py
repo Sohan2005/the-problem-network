@@ -18,6 +18,9 @@ CACHE_MAX_ENTRIES = 256
 CACHE_CONTROL = "public, max-age=300, s-maxage=1800, stale-while-revalidate=3600"
 SNAPSHOT_TTL_SECONDS = 60 * 60
 REFRESH_RETRY_SECONDS = 5 * 60
+DEFAULT_PAGE_SIZE = 24
+MAX_PAGE_SIZE = 100
+MAX_IDS = 1000
 
 
 class TTLCache:
@@ -138,10 +141,23 @@ def get_stats(response: Response, db: Session = Depends(get_db)):
     return snapshot_cache.get(("stats",), lambda: get_brief_stats(db), in_new_session(get_brief_stats))
 
 @router.get("/")
-def get_briefs(response: Response, difficulty: Optional[str] = Query(None), tag: Optional[str] = Query(None), search: Optional[str] = Query(None), sort: Optional[str] = Query(None), limit: int = Query(200, ge=1, le=500), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
+def get_briefs(response: Response, difficulty: Optional[str] = Query(None), tag: Optional[str] = Query(None), search: Optional[str] = Query(None), sort: Optional[str] = Query(None), ids: Optional[str] = Query(None), limit: int = Query(DEFAULT_PAGE_SIZE, ge=1), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
+    """
+    One page of cards and the number that match. Filters, search, sort and ids (comma-separated brief ids) run over
+    every brief in the cached snapshot before the page is sliced; limit is capped at MAX_PAGE_SIZE.
+    """
     response.headers["Cache-Control"] = CACHE_CONTROL
     entries = snapshot_cache.get(SNAPSHOT_KEY, lambda: card_snapshot(db), in_new_session(card_snapshot))
-    return select_cards(entries, difficulty=difficulty, tag=tag, search=search, sort=sort)[offset:offset + limit]
+    cards = select_cards(entries, difficulty=difficulty, tag=tag, search=search, sort=sort, ids=parse_ids(ids))
+    size = min(limit, MAX_PAGE_SIZE)
+    items = cards[offset:offset + size]
+    return {"items": items, "total": len(cards), "offset": offset, "limit": size, "has_more": offset + len(items) < len(cards)}
+
+def parse_ids(raw: Optional[str]) -> Optional[frozenset]:
+    """The first MAX_IDS numbers in a comma-separated list (other parts are skipped); None when raw is None."""
+    if raw is None:
+        return None
+    return frozenset([int(part) for part in raw.split(",") if part.strip().isdigit()][:MAX_IDS])
 
 SNAPSHOT_KEY = ("cards",)
 DIFFICULTY_ASC = {"beginner": 1, "intermediate": 2, "advanced": 3}
@@ -163,16 +179,18 @@ def card_snapshot(db: Session) -> list:
                                  stack_words | words(card["title"], card["core_task"])))
     return entries
 
-def select_cards(entries, difficulty=None, tag=None, search=None, sort=None) -> list:
+def select_cards(entries, difficulty=None, tag=None, search=None, sort=None, ids=None) -> list:
     """
-    Cards matching every filter: difficulty (any case), tag terms against the stack, search terms against title,
-    core task and stack. Newest first unless sort is difficulty_asc (then id ascending) or difficulty_desc (then id descending).
+    Cards matching every filter: ids (when not None), difficulty (any case), tag terms against the stack, search terms
+    against title, core task and stack. Newest first unless sort is difficulty_asc (then id ascending) or
+    difficulty_desc (then id descending).
     """
     level = difficulty.lower() if difficulty else None
     stack_terms, search_terms = terms(tag), terms(search)
     chosen = [
         entry for entry in entries
-        if (level is None or entry.difficulty == level)
+        if (ids is None or entry.card["id"] in ids)
+        and (level is None or entry.difficulty == level)
         and matches_all(stack_terms, entry.stack_words)
         and matches_all(search_terms, entry.search_words)
     ]

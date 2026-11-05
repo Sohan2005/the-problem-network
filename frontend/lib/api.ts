@@ -26,18 +26,62 @@ export interface BriefDetail extends Brief {
   how_to_begin: string | null;
 }
 
-export async function fetchBriefs(params?: { difficulty?: string; tag?: string; search?: string; sort?: string }): Promise<Brief[]> {
+export const PAGE_SIZE = 24;
+
+export interface BriefPage {
+  items: Brief[];
+  total: number | null;
+  hasMore: boolean;
+}
+
+export interface BriefPageParams {
+  difficulty?: string;
+  tag?: string;
+  search?: string;
+  sort?: string;
+  ids?: number[];
+  offset?: number;
+  limit?: number;
+}
+
+export async function fetchBriefPage(params: BriefPageParams = {}): Promise<BriefPage> {
+  const limit = params.limit ?? PAGE_SIZE;
   const queryParams = new URLSearchParams();
-  if (params?.difficulty) queryParams.append("difficulty", params.difficulty);
-  if (params?.tag) queryParams.append("tag", params.tag);
-  if (params?.search) queryParams.append("search", params.search);
-  if (params?.sort) queryParams.append("sort", params.sort);
-  
+  if (params.difficulty) queryParams.append("difficulty", params.difficulty);
+  if (params.tag) queryParams.append("tag", params.tag);
+  if (params.search) queryParams.append("search", params.search);
+  if (params.sort) queryParams.append("sort", params.sort);
+  if (params.ids) queryParams.append("ids", params.ids.join(","));
+  queryParams.append("limit", String(limit));
+  queryParams.append("offset", String(params.offset ?? 0));
+
   const response = await fetch(`${API_URL}/briefs/?${queryParams.toString()}`);
   if (!response.ok) {
     throw new Error("Failed to fetch briefs");
   }
-  return response.json();
+  const body = await response.json();
+  // An API deployed before paging returns a plain array and ignores ids.
+  if (Array.isArray(body)) {
+    const ids = params.ids;
+    return ids
+      ? { items: body.filter((brief: Brief) => ids.includes(brief.id)), total: null, hasMore: false }
+      : { items: body, total: null, hasMore: body.length === limit };
+  }
+  return { items: body.items, total: body.total, hasMore: body.has_more };
+}
+
+/** Items of every loaded page in order; a brief that moved to a later page between requests is kept once. */
+export function pageItems(pages: BriefPage[]): Brief[] {
+  const seen = new Set<number>();
+  return pages.flatMap((page) => page.items).filter((brief) => {
+    if (seen.has(brief.id)) return false;
+    seen.add(brief.id);
+    return true;
+  });
+}
+
+export function nextOffset(lastPage: BriefPage, pages: BriefPage[]): number | undefined {
+  return lastPage.hasMore ? pages.reduce((count, page) => count + page.items.length, 0) : undefined;
 }
 
 export async function fetchBriefStats(): Promise<{

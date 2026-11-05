@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { fetchBriefs } from "@/lib/api";
+import { useInfiniteQuery } from "@tanstack/react-query";
+import { fetchBriefPage, nextOffset, pageItems } from "@/lib/api";
 import { useFilterStore } from "@/lib/store";
 import BriefCard from "@/components/BriefCard";
 import FilterBar from "@/components/FilterBar";
+import LoadMore from "@/components/LoadMore";
 import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 
@@ -32,15 +33,21 @@ export default function Home() {
         ? { message: `No postings use "${tag}". Try a broader term, such as javascript or python.`, action: "Clear tech stack filter", onClick: () => setTag(null) }
         : { message: "No postings match your current filters", action: "Clear filters", onClick: clearFilters };
 
-  const { data: briefs, isLoading, error } = useQuery({
+  // gcTime 0 drops the pages of a previous filter combination, so returning to it starts again at the first page.
+  const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError } = useInfiniteQuery({
     queryKey: ["briefs", difficulty, tag, searchQuery, sortBy],
-    queryFn: () => fetchBriefs({ 
-      difficulty: difficulty || undefined, 
+    queryFn: ({ pageParam }) => fetchBriefPage({
+      difficulty: difficulty || undefined,
       tag: tag || undefined,
       search: searchQuery || undefined,
-      sort: sortBy || undefined
+      sort: sortBy || undefined,
+      offset: pageParam,
     }),
+    initialPageParam: 0,
+    getNextPageParam: nextOffset,
+    gcTime: 0,
   });
+  const briefs = data ? pageItems(data.pages) : undefined;
 
   return (
     <div className="min-h-screen bg-bg">
@@ -91,7 +98,7 @@ export default function Home() {
           </div>
         )}
 
-        {error && (
+        {error && !briefs && (
           <div className="text-center py-8">
             <p className="text-error mb-4">Couldn't load postings — check your connection and try again</p>
             <Button onClick={() => window.location.reload()}>Retry</Button>
@@ -114,11 +121,16 @@ export default function Home() {
         )}
 
         {/* Pagination */}
-        <div className="mt-6 flex items-center justify-center gap-2">
-          <Button variant="ghost" disabled>Previous</Button>
-          <span className="text-text-muted">Page 1</span>
-          <Button variant="ghost" disabled>Next</Button>
-        </div>
+        {briefs && briefs.length > 0 && (
+          <LoadMore
+            shown={briefs.length}
+            total={data?.pages[data.pages.length - 1]?.total ?? null}
+            hasMore={!!hasNextPage}
+            isLoading={isFetchingNextPage}
+            isError={isFetchNextPageError}
+            onLoadMore={() => fetchNextPage()}
+          />
+        )}
       </main>
 
       {/* Footer */}

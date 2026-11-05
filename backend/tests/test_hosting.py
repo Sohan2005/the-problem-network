@@ -173,7 +173,9 @@ class ListBriefsTests(unittest.TestCase):
             response = client.get("/briefs/?limit=2&offset=3")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers.get("cache-control"), CACHE_CONTROL)
-        self.assertEqual([card["id"] for card in response.json()], [4, 5])
+        body = response.json()
+        self.assertEqual([card["id"] for card in body["items"]], [4, 5])
+        self.assertEqual((body["total"], body["offset"], body["limit"], body["has_more"]), (5, 3, 2, False))
         with mock.patch("routes.briefs.get_brief_stats", return_value={"total_count": 0, "recent_count": 0, "last_updated": None}):
             stats = client.get("/briefs/stats")
         self.assertEqual(stats.status_code, 200)
@@ -193,7 +195,7 @@ class BriefRouteTests(unittest.TestCase):
         rows = [SimpleNamespace(id=1, raw_source="hackernews", **card), SimpleNamespace(id=2, raw_source="ai_suggested", **card),
                 SimpleNamespace(id=3, raw_source=None, **card)]
         with mock.patch("routes.briefs.list_all_briefs", return_value=rows):
-            body = fake_db_client().get("/briefs/").json()
+            body = fake_db_client().get("/briefs/").json()["items"]
         self.assertEqual([item["has_title_mark"] for item in body], [False, True, False])
         self.assertEqual(set(body[0]), {"id", "title", "difficulty", "core_task", "recommended_stack", "has_title_mark"})
 
@@ -271,6 +273,7 @@ class ResponseCacheTests(unittest.TestCase):
     def test_production_limits(self):
         self.assertEqual((briefs_routes.CACHE_TTL_SECONDS, briefs_routes.CACHE_MAX_ENTRIES), (1800, 256))
         self.assertEqual((briefs_routes.SNAPSHOT_TTL_SECONDS, briefs_routes.REFRESH_RETRY_SECONDS), (3600, 300))
+        self.assertEqual((briefs_routes.DEFAULT_PAGE_SIZE, briefs_routes.MAX_PAGE_SIZE), (24, 100))
 
 
 class StaleWhileRefreshCacheTests(unittest.TestCase):
@@ -340,9 +343,9 @@ class SearchTests(unittest.TestCase):
 
     def ids(self, query):
         with mock.patch("routes.briefs.list_all_briefs", return_value=self.ROWS):
-            response = fake_db_client().get(f"/briefs/?{query}")
+            response = fake_db_client().get(f"/briefs/?limit=100&{query}")
         self.assertEqual(response.status_code, 200)
-        return [card["id"] for card in response.json()]
+        return [card["id"] for card in response.json()["items"]]
 
     def test_stack_filter_ignores_case(self):
         for tag in ("react", "React", "REACT", " react "):
@@ -390,14 +393,75 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(self.ids("sort=difficulty_asc"), [2, 4, 5, 6, 7, 1, 3])
         self.assertEqual(self.ids("sort=difficulty_desc"), [3, 1, 7, 6, 5, 4, 2])
 
-    def test_search_covers_every_brief_beyond_the_first_page(self):
-        rows = [card_row(i) for i in range(1, 301)] + [card_row(301, ["Elixir"], title="Oldest")]
-        with mock.patch("routes.briefs.list_all_briefs", return_value=rows):
-            client = fake_db_client()
-            self.assertEqual([card["id"] for card in client.get("/briefs/?tag=elixir").json()], [301])
-            self.assertEqual([card["id"] for card in client.get("/briefs/?search=oldest").json()], [301])
-            self.assertEqual(len(client.get("/briefs/").json()), 200)
-            self.assertEqual(len(client.get("/briefs/?limit=500").json()), 301)
+
+
+class PagingTests(unittest.TestCase):
+    """305 briefs, newest first: id 305 is the newest, id 1 the oldest (only one with Elixir)."""
+
+    ROWS = [card_row(i, ["Elixir"] if i == 1 else ["Python"], title="Oldest" if i == 1 else f"Brief {i}",
+                     difficulty=("beginner", "intermediate", "advanced")[i % 3])
+            for i in range(305, 0, -1)]
+
+    def setUp(self):
+        patcher = mock.patch("routes.briefs.list_all_briefs", return_value=self.ROWS)
+        self.listed = patcher.start()
+        self.addCleanup(patcher.stop)
+        self.client = fake_db_client()
+
+    def page(self, query=""):
+        response = self.client.get(f"/briefs/?{query}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("cache-control"), CACHE_CONTROL)
+        return response.json()
+
+    def walk(self, query=""):
+        """Every page of a query through has_more; returns all ids and the totals seen."""
+        ids, totals, offset = [], set(), 0
+        while True:
+            body = self.page(f"{query}&offset={offset}")
+            ids += [card["id"] for card in body["items"]]
+            totals.add(body["total"])
+            if not body["has_more"]:
+                return ids, totals
+            offset += body["limit"]
+
+    def test_default_page_is_24_and_every_brief_is_reachable_by_paging(self):
+        first = self.page()
+        self.assertEqual((len(first["items"]), first["total"], first["limit"], first["has_more"]), (24, 305, 24, True))
+        ids, totals = self.walk()
+        self.assertEqual(ids, list(range(305, 0, -1)))
+        self.assertEqual(totals, {305})
+        self.assertEqual(self.listed.call_count, 1)
+
+    def test_page_size_is_capped(self):
+        body = self.page("limit=5000")
+        self.assertEqual((len(body["items"]), body["limit"], body["has_more"]), (100, 100, True))
+        last = self.page("limit=100&offset=300")
+        self.assertEqual(([card["id"] for card in last["items"]], last["has_more"]), ([5, 4, 3, 2, 1], False))
+        self.assertEqual(self.page("offset=900")["items"], [])
+        self.assertEqual(self.client.get("/briefs/?limit=0").status_code, 422)
+
+    def test_search_and_stack_filter_reach_the_oldest_brief(self):
+        for query in ("search=oldest", "tag=elixir"):
+            body = self.page(query)
+            self.assertEqual(([card["id"] for card in body["items"]], body["total"], body["has_more"]), ([1], 1, False), query)
+
+    def test_filters_and_sort_run_over_every_brief_before_paging(self):
+        beginner = [i for i in range(305, 0, -1) if i % 3 == 0]
+        ids, totals = self.walk("difficulty=Beginner&limit=10")
+        self.assertEqual((ids, totals), (beginner, {len(beginner)}))
+        expected = sorted(range(1, 306), key=lambda i: (i % 3, i))  # i % 3 indexes the levels in difficulty order
+        ids, totals = self.walk("sort=difficulty_asc&limit=24")
+        self.assertEqual((ids, totals), (expected, {305}))
+        second = self.page("sort=difficulty_asc&offset=24")
+        self.assertEqual([card["id"] for card in second["items"]], expected[24:48])
+        self.assertEqual(self.page("tag=python&difficulty=advanced&limit=100")["total"], len([i for i in range(2, 306) if i % 3 == 2]))
+
+    def test_saved_ids_return_only_those_briefs(self):
+        body = self.page("ids=1,150,305,9999,abc,150&limit=100")
+        self.assertEqual(([card["id"] for card in body["items"]], body["total"], body["has_more"]), ([305, 150, 1], 3, False))
+        self.assertEqual(self.page("ids=")["items"], [])
+        self.assertEqual(self.page("ids=" + ",".join(str(i) for i in range(1, 306)))["total"], 305)
 
 
 class BriefQueryBranchTests(RolledBackTestCase):
