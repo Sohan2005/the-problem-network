@@ -42,7 +42,6 @@ export async function fetchBriefs(params?: { difficulty?: string; tag?: string; 
 
 export async function fetchBriefStats(): Promise<{
   total_count: number;
-  recent_count: number;
   last_updated: string | null;
 }> {
   const response = await fetch(`${API_URL}/briefs/stats`);

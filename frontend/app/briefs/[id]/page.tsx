@@ -50,7 +50,7 @@ export default function BriefDetailPage() {
     <div className="min-h-screen bg-bg">
       <Navbar />
       <main className="max-w-[720px] mx-auto px-4 py-6 text-center">
-        <p className="text-error mb-4">Couldn't load this project — check your connection and try again</p>
+        <p className="text-error mb-4">Couldn't load this posting — check your connection and try again</p>
         <Button onClick={() => window.location.reload()}>Retry</Button>
       </main>
     </div>
@@ -60,7 +60,7 @@ export default function BriefDetailPage() {
     <div className="min-h-screen bg-bg">
       <Navbar />
       <main className="max-w-[720px] mx-auto px-4 py-6 text-center">
-        <p className="text-text-muted">Project not found</p>
+        <p className="text-text-muted">Posting not found</p>
       </main>
     </div>
   );
@@ -229,7 +229,7 @@ export default function BriefDetailPage() {
       {/* Footer */}
       <footer className="border-t border-border bg-bg-alt py-6 mt-8">
         <div className="max-w-7xl mx-auto px-4 text-center text-text-muted text-sm">
-          <p className="mb-2">The Problem Network — Translating real-world technical problems into junior-dev-friendly briefs</p>
+          <p className="mb-2">The Problem Network — Translating real-world technical problems into junior-dev-friendly postings</p>
           <a href="/privacy" className="text-accent hover:text-accent-hover transition-colors">Privacy</a>
         </div>
       </footer>

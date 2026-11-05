@@ -44,7 +44,7 @@ export default function SavedPage() {
     <div className="min-h-screen bg-bg">
       <Navbar />
       <main className="max-w-7xl mx-auto px-4 py-6">
-        <h1 className="text-h1 font-bold text-text mb-6">Saved Projects</h1>
+        <h1 className="text-h1 font-bold text-text mb-6">Saved Postings</h1>
         
         {savedBriefs.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -54,8 +54,8 @@ export default function SavedPage() {
           </div>
         ) : (
           <div className="text-center py-8">
-            <p className="text-text-muted mb-4">No saved projects yet</p>
-            <p className="text-text-muted text-small">Click the Favorite button on any project to save it here</p>
+            <p className="text-text-muted mb-4">No saved postings yet</p>
+            <p className="text-text-muted text-small">Click the Favorite button on any posting to save it here</p>
           </div>
         )}
       </main>

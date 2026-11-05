@@ -27,10 +27,10 @@ export default function Home() {
 
   const emptyState =
     searchQuery && !tag
-      ? { message: `No projects match "${searchQuery}". Try fewer or shorter words.`, action: "Clear search", onClick: () => setSearchQuery(null) }
+      ? { message: `No postings match "${searchQuery}". Try fewer or shorter words.`, action: "Clear search", onClick: () => setSearchQuery(null) }
       : tag && !searchQuery
-        ? { message: `No projects use "${tag}". Try a broader term, such as javascript or python.`, action: "Clear tech stack filter", onClick: () => setTag(null) }
-        : { message: "No projects match your current filters", action: "Clear filters", onClick: clearFilters };
+        ? { message: `No postings use "${tag}". Try a broader term, such as javascript or python.`, action: "Clear tech stack filter", onClick: () => setTag(null) }
+        : { message: "No postings match your current filters", action: "Clear filters", onClick: clearFilters };
 
   const { data: briefs, isLoading, error } = useQuery({
     queryKey: ["briefs", difficulty, tag, searchQuery, sortBy],
@@ -50,7 +50,7 @@ export default function Home() {
         <div className="mb-4">
           <input
             type="text"
-            placeholder="Search projects..."
+            placeholder="Search postings..."
             value={localSearch}
             onChange={(e) => setLocalSearch(e.target.value)}
             className="w-full max-w-md px-4 py-2 border border-border rounded-md bg-bg text-text min-h-[48px]"
@@ -93,7 +93,7 @@ export default function Home() {
 
         {error && (
           <div className="text-center py-8">
-            <p className="text-error mb-4">Couldn't load projects — check your connection and try again</p>
+            <p className="text-error mb-4">Couldn't load postings — check your connection and try again</p>
             <Button onClick={() => window.location.reload()}>Retry</Button>
           </div>
         )}
@@ -124,7 +124,7 @@ export default function Home() {
       {/* Footer */}
       <footer className="border-t border-border bg-bg-alt py-6 mt-8">
         <div className="max-w-7xl mx-auto px-4 text-center text-text-muted text-sm">
-          <p className="mb-2">The Problem Network — Translating real-world technical problems into junior-dev-friendly briefs</p>
+          <p className="mb-2">The Problem Network — Translating real-world technical problems into junior-dev-friendly postings</p>
           <a href="/privacy" className="text-accent hover:text-accent-hover transition-colors">Privacy</a>
         </div>
       </footer>

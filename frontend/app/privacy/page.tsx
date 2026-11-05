@@ -22,9 +22,9 @@ export default function PrivacyPage() {
           </section>
 
           <section>
-            <h2 className="text-h2 font-bold text-text mb-3">Saved Projects</h2>
+            <h2 className="text-h2 font-bold text-text mb-3">Saved Postings</h2>
             <p className="text-body text-text leading-body">
-              Your favorited projects are stored locally in your browser's localStorage. This data persists only on your device and is not transmitted to or stored by this site's servers. If you clear your browser data or switch devices, your saved projects will be lost.
+              Your favorited postings are stored locally in your browser's localStorage. This data persists only on your device and is not transmitted to or stored by this site's servers. If you clear your browser data or switch devices, your saved postings will be lost.
             </p>
           </section>
 
@@ -40,7 +40,7 @@ export default function PrivacyPage() {
       {/* Footer */}
       <footer className="border-t border-border bg-bg-alt py-6 mt-8">
         <div className="max-w-7xl mx-auto px-4 text-center text-text-muted text-sm">
-          <p>The Problem Network — Translating real-world technical problems into junior-dev-friendly briefs</p>
+          <p>The Problem Network — Translating real-world technical problems into junior-dev-friendly postings</p>
         </div>
       </footer>
     </div>

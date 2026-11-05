@@ -17,6 +17,8 @@ export default function FreshnessStrip() {
     );
   }
 
+  const totalCount = stats?.total_count || 0;
+
   const formatDate = (dateString: string | null) => {
     if (!dateString) return "Never";
     const date = new Date(dateString);
@@ -56,16 +58,10 @@ export default function FreshnessStrip() {
         <span className="text-text-muted text-small">Live</span>
       </div>
 
-      {/* Total Briefs Pill */}
+      {/* Total Postings Pill */}
       <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-bg-alt">
-        <span className="text-text-muted text-small">{stats?.total_count || 0}</span>
-        <span className="text-text-muted text-small">briefs</span>
-      </div>
-
-      {/* Added This Week Pill */}
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-bg-alt">
-        <span className="text-accent-hover font-bold text-small">{stats?.recent_count || 0}</span>
-        <span className="text-text-muted text-small">added this week</span>
+        <span className="text-text-muted text-small">{totalCount}</span>
+        <span className="text-text-muted text-small">{totalCount === 1 ? "posting" : "postings"}</span>
       </div>
 
       {/* Updated Pill */}
@@ -73,6 +69,8 @@ export default function FreshnessStrip() {
         <span className="text-text-muted text-small">Updated</span>
         <span className="text-accent-hover font-bold text-small">{formatDate(stats?.last_updated || null)}</span>
       </div>
+
+      <p className="text-text-muted text-small">New postings added every day</p>
     </div>
   );
 }

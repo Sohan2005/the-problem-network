@@ -4,7 +4,7 @@ import "../styles/tokens.css";
 
 export const metadata: Metadata = {
   title: "The Problem Network",
-  description: "Translates real-world technical problems into structured, junior-dev-friendly briefs.",
+  description: "Translates real-world technical problems into structured, junior-dev-friendly postings.",
 };
 
 // Must stay in sync with the localStorage key and class used by ThemeToggle
