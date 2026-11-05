@@ -34,7 +34,7 @@ export default function FilterBar() {
         type="text"
         value={localTag}
         onChange={(e) => setLocalTag(e.target.value)}
-        placeholder="Filter by tech stack..."
+        placeholder="Filter by tech stack, e.g. react, python"
         aria-label="Filter by tech stack"
         className="px-3 py-2 border border-border rounded-md bg-bg text-text min-h-[48px] flex-1 min-w-[200px]"
       />

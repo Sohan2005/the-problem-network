@@ -10,7 +10,7 @@ import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 
 export default function Home() {
-  const { difficulty, tag, searchQuery, sortBy, setSearchQuery, setSortBy } = useFilterStore();
+  const { difficulty, tag, searchQuery, sortBy, setSearchQuery, setSortBy, setTag, clearFilters } = useFilterStore();
   const [localSearch, setLocalSearch] = useState("");
 
   // Debounced search
@@ -24,6 +24,13 @@ export default function Home() {
   useEffect(() => {
     if (searchQuery === null) setLocalSearch("");
   }, [searchQuery]);
+
+  const emptyState =
+    searchQuery && !tag
+      ? { message: `No projects match "${searchQuery}". Try fewer or shorter words.`, action: "Clear search", onClick: () => setSearchQuery(null) }
+      : tag && !searchQuery
+        ? { message: `No projects use "${tag}". Try a broader term, such as javascript or python.`, action: "Clear tech stack filter", onClick: () => setTag(null) }
+        : { message: "No projects match your current filters", action: "Clear filters", onClick: clearFilters };
 
   const { data: briefs, isLoading, error } = useQuery({
     queryKey: ["briefs", difficulty, tag, searchQuery, sortBy],
@@ -93,8 +100,8 @@ export default function Home() {
 
         {briefs && briefs.length === 0 && (
           <div className="text-center py-8">
-            <p className="text-text-muted mb-4">No projects match your current filters</p>
-            <Button onClick={() => useFilterStore.getState().clearFilters()}>Clear filters</Button>
+            <p className="text-text-muted mb-4">{emptyState.message}</p>
+            <Button onClick={emptyState.onClick}>{emptyState.action}</Button>
           </div>
         )}
 

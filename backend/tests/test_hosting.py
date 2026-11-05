@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import event, inspect, text
 
 from db.models import Brief, Problem, RawIdea, Tag, brief_tags
-from db.queries import canonicalize_url, get_brief_by_id, list_briefs
+from db.queries import canonicalize_url, get_brief_by_id, list_all_briefs
 from main import create_app
 from routes import briefs as briefs_routes
 from routes.briefs import TTLCache, get_db
@@ -144,37 +144,35 @@ class DocsTests(unittest.TestCase):
             self.assertEqual(client.get(path).status_code, 404, path)
 
 
+def card_row(id, stack=None, title="T", core_task="C", difficulty="beginner", raw_source="hackernews"):
+    return SimpleNamespace(id=id, title=title, difficulty=difficulty, core_task=core_task,
+                           recommended_stack=stack if stack is not None else ["Python"], raw_source=raw_source)
+
+
 class ListBriefsTests(unittest.TestCase):
-    def test_limit_and_offset(self):
+    def test_selects_every_brief_newest_first(self):
         db = RecordingSession()
-        self.assertEqual(list_briefs(db, limit=10, offset=25), [])
-        self.assertEqual(db.query_obj.limit_value, 10)
-        self.assertEqual(db.query_obj.offset_value, 25)
+        self.assertEqual(list_all_briefs(db), [])
+        self.assertIsNone(db.query_obj.limit_value)
+        self.assertIsNone(db.query_obj.offset_value)
         order_sql = " ".join(str(item) for item in db.query_obj.order).lower()
         self.assertIn("created_at", order_sql)
         self.assertIn("briefs.id", order_sql)
 
-    def test_limit_is_capped_and_offset_is_clamped(self):
-        db = RecordingSession()
-        list_briefs(db, limit=9000, offset=-4)
-        self.assertEqual(db.query_obj.limit_value, 500)
-        self.assertEqual(db.query_obj.offset_value, 0)
-
     def test_selects_card_columns_and_raw_source_only(self):
         db = RecordingSession()
-        list_briefs(db)
+        list_all_briefs(db)
         self.assertEqual([column.key for column in db.query_obj.columns],
                          ["id", "title", "difficulty", "core_task", "recommended_stack", "raw_source"])
         self.assertEqual(db.query_obj.joins, [RawIdea])
 
-    def test_route_passes_limit_offset_and_cache_header(self):
+    def test_route_pages_the_snapshot_and_sets_cache_header(self):
         client = fake_db_client()
-        with mock.patch("routes.briefs.list_briefs", return_value=[]) as listed:
+        with mock.patch("routes.briefs.list_all_briefs", return_value=[card_row(i) for i in range(1, 6)]):
             response = client.get("/briefs/?limit=2&offset=3")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers.get("cache-control"), CACHE_CONTROL)
-        self.assertEqual(listed.call_args.kwargs["limit"], 2)
-        self.assertEqual(listed.call_args.kwargs["offset"], 3)
+        self.assertEqual([card["id"] for card in response.json()], [4, 5])
         with mock.patch("routes.briefs.get_brief_stats", return_value={"total_count": 0, "recent_count": 0, "last_updated": None}):
             stats = client.get("/briefs/stats")
         self.assertEqual(stats.status_code, 200)
@@ -193,7 +191,7 @@ class BriefRouteTests(unittest.TestCase):
         card = {"title": "T", "difficulty": "beginner", "core_task": "C", "recommended_stack": ["Go"]}
         rows = [SimpleNamespace(id=1, raw_source="hackernews", **card), SimpleNamespace(id=2, raw_source="ai_suggested", **card),
                 SimpleNamespace(id=3, raw_source=None, **card)]
-        with mock.patch("routes.briefs.list_briefs", return_value=rows):
+        with mock.patch("routes.briefs.list_all_briefs", return_value=rows):
             body = fake_db_client().get("/briefs/").json()
         self.assertEqual([item["has_title_mark"] for item in body], [False, True, False])
         self.assertEqual(set(body[0]), {"id", "title", "difficulty", "core_task", "recommended_stack", "has_title_mark"})
@@ -225,13 +223,15 @@ class BriefRouteTests(unittest.TestCase):
 
 
 class ResponseCacheTests(unittest.TestCase):
-    def test_list_is_cached_per_query(self):
+    def test_one_snapshot_query_serves_every_list_query(self):
         client = fake_db_client()
-        with mock.patch("routes.briefs.list_briefs", return_value=[]) as listed:
+        with mock.patch("routes.briefs.list_all_briefs", return_value=[]) as listed:
             for path in ("/briefs/?tag=go", "/briefs/?tag=go", "/briefs/?tag=rust", "/briefs/?tag=go&limit=5",
-                         "/briefs/?tag=go&sort=difficulty_asc", "/briefs/?tag=go"):
-                self.assertEqual(client.get(path).status_code, 200)
-        self.assertEqual(listed.call_count, 4)
+                         "/briefs/?tag=go&sort=difficulty_asc", "/briefs/?search=x&difficulty=Advanced", "/briefs/"):
+                response = client.get(path)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.headers.get("cache-control"), CACHE_CONTROL)
+        self.assertEqual(listed.call_count, 1)
 
     def test_detail_and_stats_are_cached_but_not_found_is_not(self):
         client = fake_db_client()
@@ -271,6 +271,79 @@ class ResponseCacheTests(unittest.TestCase):
         self.assertEqual((briefs_routes.CACHE_TTL_SECONDS, briefs_routes.CACHE_MAX_ENTRIES), (1800, 256))
 
 
+class SearchTests(unittest.TestCase):
+    ROWS = [
+        card_row(1, ["React", "Node.js"], title="Climbing log", difficulty="intermediate"),
+        card_row(2, ["JavaScript/TypeScript"]),
+        card_row(3, ["Python", "PostgreSQL"], difficulty="advanced"),
+        card_row(4, ["Kotlin/Java"]),
+        card_row(5, ["Go"]),
+        card_row(6, ["MongoDB", "Web development"], core_task="Track gigs for musicians."),
+        SimpleNamespace(id=7, title="Empty", difficulty="beginner", core_task="C", recommended_stack=None, raw_source=None),
+    ]
+
+    def ids(self, query):
+        with mock.patch("routes.briefs.list_all_briefs", return_value=self.ROWS):
+            response = fake_db_client().get(f"/briefs/?{query}")
+        self.assertEqual(response.status_code, 200)
+        return [card["id"] for card in response.json()]
+
+    def test_stack_filter_ignores_case(self):
+        for tag in ("react", "React", "REACT", " react "):
+            self.assertEqual(self.ids(f"tag={tag}"), [1], tag)
+
+    def test_stack_filter_matches_partial_words_and_compound_items(self):
+        self.assertEqual(self.ids("tag=reac"), [1])
+        self.assertEqual(self.ids("tag=pyth"), [3])
+        self.assertEqual(self.ids("tag=typescript"), [2])
+        self.assertEqual(self.ids("tag=web"), [6])
+
+    def test_stack_filter_aliases(self):
+        self.assertEqual(self.ids("tag=js"), [2])
+        self.assertEqual(self.ids("tag=ts"), [2])
+        for tag in ("node", "nodejs", "node.js", "Node-JS"):
+            self.assertEqual(self.ids(f"tag={tag}"), [1], tag)
+        self.assertEqual(self.ids("tag=postgres"), [3])
+        self.assertEqual(self.ids("tag=py"), [3])
+
+    def test_short_terms_and_java_match_whole_words_only(self):
+        self.assertEqual(self.ids("tag=go"), [5])
+        self.assertEqual(self.ids("tag=java"), [4])
+        self.assertEqual(self.ids("tag=jav"), [2, 4])
+
+    def test_every_term_must_match(self):
+        for tag in ("react node", "react, node", "React/Node.js"):
+            self.assertEqual(self.ids(f"tag={tag}"), [1], tag)
+        self.assertEqual(self.ids("tag=react python"), [])
+
+    def test_search_box_covers_title_core_task_and_stack(self):
+        self.assertEqual(self.ids("search=python"), [3])
+        self.assertEqual(self.ids("search=climbing react"), [1])
+        self.assertEqual(self.ids("search=MUSICIAN"), [6])
+        self.assertEqual(self.ids("search=climbing python"), [])
+
+    def test_no_match_and_empty_queries(self):
+        self.assertEqual(self.ids("tag=zzzz"), [])
+        self.assertEqual(self.ids("search=zzzz"), [])
+        self.assertEqual(self.ids("tag=&search="), [1, 2, 3, 4, 5, 6, 7])
+        self.assertEqual(self.ids("tag=,"), [1, 2, 3, 4, 5, 6, 7])
+
+    def test_filters_combine_with_difficulty_and_sort(self):
+        self.assertEqual(self.ids("tag=react&difficulty=Intermediate"), [1])
+        self.assertEqual(self.ids("tag=react&difficulty=beginner"), [])
+        self.assertEqual(self.ids("sort=difficulty_asc"), [2, 4, 5, 6, 7, 1, 3])
+        self.assertEqual(self.ids("sort=difficulty_desc"), [3, 1, 7, 6, 5, 4, 2])
+
+    def test_search_covers_every_brief_beyond_the_first_page(self):
+        rows = [card_row(i) for i in range(1, 301)] + [card_row(301, ["Elixir"], title="Oldest")]
+        with mock.patch("routes.briefs.list_all_briefs", return_value=rows):
+            client = fake_db_client()
+            self.assertEqual([card["id"] for card in client.get("/briefs/?tag=elixir").json()], [301])
+            self.assertEqual([card["id"] for card in client.get("/briefs/?search=oldest").json()], [301])
+            self.assertEqual(len(client.get("/briefs/").json()), 200)
+            self.assertEqual(len(client.get("/briefs/?limit=500").json()), 301)
+
+
 class BriefQueryBranchTests(RolledBackTestCase):
     """The API queries on the test branch: the list selects explicit columns, the detail loads no embedding."""
 
@@ -299,7 +372,7 @@ class BriefQueryBranchTests(RolledBackTestCase):
         return SimpleNamespace(id=brief.id, url=url)
 
     def test_list_rows_carry_raw_source_and_no_embedding(self):
-        rows = list_briefs(self.db, limit=2)
+        rows = list_all_briefs(self.db)[:2]
         self.assertEqual([(row.id, row.raw_source) for row in rows], [(self.real.id, "hackernews"), (self.ai.id, "ai_suggested")])
         self.assertNotIn("embedding", rows[0]._fields)
 

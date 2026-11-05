@@ -1,12 +1,13 @@
 import threading
 import time
 from collections import OrderedDict
+from typing import NamedTuple, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
-from typing import Optional
+from brief_search import matches_all, terms, words
 from db.database import get_db
-from db.queries import list_briefs, get_brief_by_id, get_brief_stats
+from db.queries import list_all_briefs, get_brief_by_id, get_brief_stats
 from pipeline.publish import AI_SOURCES, source_link
 
 router = APIRouter(prefix="/briefs")
@@ -65,8 +66,47 @@ def get_stats(response: Response, db: Session = Depends(get_db)):
 @router.get("/")
 def get_briefs(response: Response, difficulty: Optional[str] = Query(None), tag: Optional[str] = Query(None), search: Optional[str] = Query(None), sort: Optional[str] = Query(None), limit: int = Query(200, ge=1, le=500), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
     response.headers["Cache-Control"] = CACHE_CONTROL
-    key = ("list", difficulty, tag, search, sort, limit, offset)
-    return cache.get_or_set(key, lambda: brief_cards(list_briefs(db, difficulty=difficulty, tag=tag, search=search, sort=sort, limit=limit, offset=offset)))
+    entries = cache.get_or_set(SNAPSHOT_KEY, lambda: card_snapshot(db))
+    return select_cards(entries, difficulty=difficulty, tag=tag, search=search, sort=sort)[offset:offset + limit]
+
+SNAPSHOT_KEY = ("cards",)
+DIFFICULTY_ASC = {"beginner": 1, "intermediate": 2, "advanced": 3}
+DIFFICULTY_DESC = {"advanced": 1, "intermediate": 2, "beginner": 3}
+
+class CardEntry(NamedTuple):
+    card: dict
+    difficulty: str
+    stack_words: frozenset
+    search_words: frozenset
+
+def card_snapshot(db: Session) -> list:
+    """Every brief as a CardEntry, newest first. One query; the result is cached for every filter, sort and page."""
+    entries = []
+    for card in brief_cards(list_all_briefs(db)):
+        stack = card["recommended_stack"] if isinstance(card["recommended_stack"], list) else []
+        stack_words = words(*stack)
+        entries.append(CardEntry(card, (card["difficulty"] or "").lower(), stack_words,
+                                 stack_words | words(card["title"], card["core_task"])))
+    return entries
+
+def select_cards(entries, difficulty=None, tag=None, search=None, sort=None) -> list:
+    """
+    Cards matching every filter: difficulty (any case), tag terms against the stack, search terms against title,
+    core task and stack. Newest first unless sort is difficulty_asc (then id ascending) or difficulty_desc (then id descending).
+    """
+    level = difficulty.lower() if difficulty else None
+    stack_terms, search_terms = terms(tag), terms(search)
+    chosen = [
+        entry for entry in entries
+        if (level is None or entry.difficulty == level)
+        and matches_all(stack_terms, entry.stack_words)
+        and matches_all(search_terms, entry.search_words)
+    ]
+    if sort == "difficulty_asc":
+        chosen.sort(key=lambda entry: (DIFFICULTY_ASC.get(entry.difficulty, 4), entry.card["id"]))
+    elif sort == "difficulty_desc":
+        chosen.sort(key=lambda entry: (DIFFICULTY_DESC.get(entry.difficulty, 4), -entry.card["id"]))
+    return [entry.card for entry in chosen]
 
 def brief_cards(briefs) -> list:
     return [

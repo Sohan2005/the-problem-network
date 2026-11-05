@@ -2,7 +2,6 @@ import html
 import re
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
-from typing import Optional
 
 def create_problem(db: Session, source: str, title: str, body: str, source_url: str):
     from .models import Problem
@@ -45,71 +44,23 @@ def get_problem_by_url(db: Session, source_url: str):
     from .models import Problem
     return db.query(Problem).filter(Problem.source_url == source_url).first()
 
-DEFAULT_BRIEF_LIMIT = 200
-MAX_BRIEF_LIMIT = 500
 # Never add embedding here: it is about 39 KB per brief and the API does not return it.
 LIST_COLUMNS = ("id", "title", "difficulty", "core_task", "recommended_stack")
 DETAIL_COLUMNS = LIST_COLUMNS + ("target_user", "suggested_features", "learning_outcomes", "what_youll_need", "how_to_begin")
 
 
-def list_briefs(db: Session, difficulty: Optional[str] = None, tag: Optional[str] = None, search: Optional[str] = None, sort: Optional[str] = None, limit: int = DEFAULT_BRIEF_LIMIT, offset: int = 0):
-    """Rows with LIST_COLUMNS plus raw_source (the linked raw idea's source, None without one)."""
+def list_all_briefs(db: Session):
+    """
+    Every brief, newest first (then highest id), as rows with LIST_COLUMNS plus raw_source (the linked raw idea's
+    source, None without one). No filter or limit: the API filters, sorts and pages this snapshot in memory.
+    """
     from .models import Brief, RawIdea
-    from sqlalchemy import or_, case, func
-    
-    query = (
+    return (
         db.query(*(getattr(Brief, name) for name in LIST_COLUMNS), RawIdea.source.label("raw_source"))
         .outerjoin(RawIdea, RawIdea.id == Brief.raw_idea_id)
+        .order_by(Brief.created_at.desc(), Brief.id.desc())
+        .all()
     )
-    
-    if difficulty:
-        query = query.filter(Brief.difficulty == difficulty.lower())
-    
-    if tag:
-        # Filter by recommended_stack (JSON array) instead of tags relationship
-        # Lowercase the JSON text, cast to JSONB and use @> for case-insensitive array containment
-        from sqlalchemy import cast, Text
-        from sqlalchemy.dialects.postgresql import JSONB
-        stack_lower = cast(func.lower(cast(Brief.recommended_stack, Text)), JSONB)
-        query = query.filter(stack_lower.op('@>')([tag.lower()]))
-    
-    if search:
-        search_term = f"%{search}%"
-        query = query.filter(
-            or_(
-                Brief.title.ilike(search_term),
-                Brief.core_task.ilike(search_term)
-            )
-        )
-    
-    # Stable order: the requested sort, then id, so limit/offset pages do not shuffle.
-    difficulty_level = func.lower(Brief.difficulty)
-    if sort == "difficulty_asc":
-        ordering = (
-            case(
-                (difficulty_level == "beginner", 1),
-                (difficulty_level == "intermediate", 2),
-                (difficulty_level == "advanced", 3),
-                else_=4
-            ),
-            Brief.id.asc(),
-        )
-    elif sort == "difficulty_desc":
-        ordering = (
-            case(
-                (difficulty_level == "advanced", 1),
-                (difficulty_level == "intermediate", 2),
-                (difficulty_level == "beginner", 3),
-                else_=4
-            ),
-            Brief.id.desc(),
-        )
-    else:
-        ordering = (Brief.created_at.desc(), Brief.id.desc())
-
-    bounded = min(max(int(limit), 1), MAX_BRIEF_LIMIT)
-    skipped = max(int(offset), 0)
-    return query.order_by(*ordering).limit(bounded).offset(skipped).all()
 
 def get_brief_by_id(db: Session, brief_id: int):
     """
