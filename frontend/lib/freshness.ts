@@ -1,13 +1,7 @@
-export interface PublishSchedule {
-  hourUtc: number;
-  minuteUtc: number;
-  graceHours: number;
-}
-
 export type Freshness = "live" | "delayed";
 
-const HOUR_MS = 60 * 60 * 1000;
-const DAY_MS = 24 * HOUR_MS;
+// Larger setTimeout delays overflow and fire immediately.
+export const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
 /**
  * A stats timestamp as a Date. briefs.created_at is naive UTC, so a value without an offset is read as UTC.
@@ -22,30 +16,17 @@ export function parseUtcTimestamp(value: string | null | undefined): Date | null
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-/** The most recent scheduled publish time at or before now: today's once it has passed, otherwise yesterday's. */
-export function expectedPublishAt(now: Date, schedule: PublishSchedule): Date {
-  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), schedule.hourUtc, schedule.minuteUtc);
-  return new Date(today <= now.getTime() ? today : today - DAY_MS);
-}
-
 /**
- * Live when the newest posting is at or after the most recent expected publish time, or while now is inside the
- * grace period after it and the newest posting is at or after the previous expected publish time (the end of the
- * grace period itself counts as passed). Delayed otherwise, including when there is no timestamp.
+ * Live while the newest posting is younger than the live window (a future timestamp counts as live); delayed from
+ * the exact end of the window on, and when there is no timestamp.
  */
-export function freshness(lastPublished: Date | null, now: Date, schedule: PublishSchedule): Freshness {
+export function freshness(lastPublished: Date | null, now: Date, liveWindowMs: number): Freshness {
   if (!lastPublished) return "delayed";
-  const expected = expectedPublishAt(now, schedule).getTime();
-  const last = lastPublished.getTime();
-  if (last >= expected) return "live";
-  const inGrace = now.getTime() < expected + schedule.graceHours * HOUR_MS;
-  return inGrace && last >= expected - DAY_MS ? "live" : "delayed";
+  return now.getTime() - lastPublished.getTime() < liveWindowMs ? "live" : "delayed";
 }
 
-/** When a live state turns delayed if nothing newer is published; null when it is already delayed. */
-export function delayedAt(lastPublished: Date | null, now: Date, schedule: PublishSchedule): Date | null {
-  if (freshness(lastPublished, now, schedule) === "delayed") return null;
-  const expected = expectedPublishAt(now, schedule).getTime();
-  const due = lastPublished && lastPublished.getTime() >= expected ? expected + DAY_MS : expected;
-  return new Date(due + schedule.graceHours * HOUR_MS);
+/** Milliseconds until a live state turns delayed, capped at MAX_TIMEOUT_MS; null when it is already delayed. */
+export function msUntilDelayed(lastPublished: Date | null, now: Date, liveWindowMs: number): number | null {
+  if (freshness(lastPublished, now, liveWindowMs) === "delayed") return null;
+  return Math.min(lastPublished!.getTime() + liveWindowMs - now.getTime(), MAX_TIMEOUT_MS);
 }

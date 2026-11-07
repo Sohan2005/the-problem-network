@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchBriefStats } from "@/lib/api";
-import { delayedAt, freshness, parseUtcTimestamp } from "@/lib/freshness";
-import { PUBLISH_SCHEDULE } from "@/lib/publishSchedule";
+import { freshness, msUntilDelayed, parseUtcTimestamp } from "@/lib/freshness";
+import { LIVE_WINDOW_MS } from "@/lib/publishSchedule";
 
 const STATUS = {
   live: { label: "Live", dot: "bg-accent-hover" },
@@ -21,17 +21,20 @@ export default function FreshnessStrip() {
 
   const lastPublished = parseUtcTimestamp(stats?.last_updated);
   const now = new Date(Math.max(tick, dataUpdatedAt));
-  const state = isError ? "unreachable" : freshness(lastPublished, now, PUBLISH_SCHEDULE);
-  const changeAt = isError || !stats ? null : delayedAt(lastPublished, now, PUBLISH_SCHEDULE)?.getTime() ?? null;
+  const state = isError ? "unreachable" : freshness(lastPublished, now, LIVE_WINDOW_MS);
+  const lastPublishedMs = lastPublished?.getTime() ?? null;
 
-  // One timeout at the moment Live would turn into Update delayed: fetch the stats again, then re-evaluate.
+  // One timeout at the moment the newest posting reaches the end of the live window: fetch the stats again, then
+  // re-evaluate. A capped or early timeout updates tick, which schedules the remainder.
   useEffect(() => {
-    if (changeAt === null) return;
+    if (isError || lastPublishedMs === null) return;
+    const delay = msUntilDelayed(new Date(lastPublishedMs), new Date(), LIVE_WINDOW_MS);
+    if (delay === null) return;
     const timer = setTimeout(() => {
-      refetch().finally(() => setTick(Math.max(Date.now(), changeAt)));
-    }, Math.max(0, changeAt - Date.now()));
+      refetch().finally(() => setTick(Date.now()));
+    }, delay);
     return () => clearTimeout(timer);
-  }, [changeAt, refetch]);
+  }, [isError, lastPublishedMs, tick, refetch]);
 
   if (isLoading) {
     return (

@@ -2,11 +2,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { delayedAt, expectedPublishAt, freshness, parseUtcTimestamp } from "./freshness.ts";
-import { PUBLISH_SCHEDULE } from "./publishSchedule.ts";
+import { MAX_TIMEOUT_MS, freshness, msUntilDelayed, parseUtcTimestamp } from "./freshness.ts";
+import { LIVE_WINDOW_MS, PUBLISH_SCHEDULE } from "./publishSchedule.ts";
 
-const SCHEDULE = { hourUtc: 10, minuteUtc: 0, graceHours: 3 };
-const at = (iso) => new Date(iso);
+const HOUR = 60 * 60 * 1000;
+const MINUTE = 60 * 1000;
+const NOW = new Date("2026-11-07T11:00:00Z");
+const ago = (ms) => new Date(NOW.getTime() - ms);
 
 test("the constants match the daily_publish timer and keep a 3-hour grace period", () => {
   const app = readFileSync(new URL("../../functions/scheduled_pipeline/function_app.py", import.meta.url), "utf8");
@@ -15,7 +17,9 @@ test("the constants match the daily_publish timer and keep a 3-hour grace period
   assert.equal(Number(second), 0);
   assert.equal(Number(minute), PUBLISH_SCHEDULE.minuteUtc);
   assert.equal(Number(hour), PUBLISH_SCHEDULE.hourUtc);
+  assert.equal(PUBLISH_SCHEDULE.cadenceHours, 24);
   assert.equal(PUBLISH_SCHEDULE.graceHours, 3);
+  assert.equal(LIVE_WINDOW_MS, 27 * HOUR);
 });
 
 test("timestamps without an offset are UTC; bad values are null", () => {
@@ -29,54 +33,25 @@ test("timestamps without an offset are UTC; bad values are null", () => {
   assert.equal(parseUtcTimestamp("not a date"), null);
 });
 
-test("expected publish time is yesterday's before 10:00 UTC and today's from 10:00 UTC exactly", () => {
-  assert.equal(expectedPublishAt(at("2026-11-07T09:59:59Z"), SCHEDULE).toISOString(), "2026-11-06T10:00:00.000Z");
-  assert.equal(expectedPublishAt(at("2026-11-07T10:00:00Z"), SCHEDULE).toISOString(), "2026-11-07T10:00:00.000Z");
-  assert.equal(expectedPublishAt(at("2026-11-07T23:59:59Z"), SCHEDULE).toISOString(), "2026-11-07T10:00:00.000Z");
-  assert.equal(expectedPublishAt(at("2027-01-01T00:30:00Z"), SCHEDULE).toISOString(), "2026-12-31T10:00:00.000Z");
+test("live below 27 hours old, delayed from exactly 27 hours", () => {
+  assert.equal(freshness(ago(26 * HOUR + 59 * MINUTE), NOW, LIVE_WINDOW_MS), "live");
+  assert.equal(freshness(ago(27 * HOUR - 1), NOW, LIVE_WINDOW_MS), "live");
+  assert.equal(freshness(ago(27 * HOUR), NOW, LIVE_WINDOW_MS), "delayed");
+  assert.equal(freshness(ago(3 * 24 * HOUR), NOW, LIVE_WINDOW_MS), "delayed");
 });
 
-test("before today's publish time the newest posting is compared with yesterday's", () => {
-  assert.equal(freshness(at("2026-11-06T10:00:07Z"), at("2026-11-07T08:00:00Z"), SCHEDULE), "live");
-  assert.equal(freshness(at("2026-11-05T10:00:07Z"), at("2026-11-07T08:00:00Z"), SCHEDULE), "delayed");
+test("a missing or unparsable timestamp is delayed; a future one is live", () => {
+  assert.equal(freshness(null, NOW, LIVE_WINDOW_MS), "delayed");
+  assert.equal(freshness(parseUtcTimestamp("not a date"), NOW, LIVE_WINDOW_MS), "delayed");
+  assert.equal(freshness(ago(-2 * HOUR), NOW, LIVE_WINDOW_MS), "live");
 });
 
-test("exact boundaries: publish time, a posting at that instant, and the end of the grace period", () => {
-  const yesterday = at("2026-11-06T10:00:07Z");
-  assert.equal(freshness(yesterday, at("2026-11-07T10:00:00Z"), SCHEDULE), "live");
-  assert.equal(freshness(at("2026-11-07T10:00:00Z"), at("2026-11-07T10:00:00Z"), SCHEDULE), "live");
-  assert.equal(freshness(yesterday, at("2026-11-07T12:59:59.999Z"), SCHEDULE), "live");
-  assert.equal(freshness(yesterday, at("2026-11-07T13:00:00Z"), SCHEDULE), "delayed");
-  assert.equal(freshness(at("2026-11-07T09:59:59.999Z"), at("2026-11-07T13:00:00Z"), SCHEDULE), "delayed");
-});
-
-test("inside the grace window, Live needs a posting at or after yesterday's publish time", () => {
-  const now = at("2026-11-07T11:00:00Z");
-  assert.equal(freshness(at("2026-11-06T10:05:00Z"), now, SCHEDULE), "live");
-  assert.equal(freshness(at("2026-11-06T10:00:00Z"), now, SCHEDULE), "live");
-  assert.equal(freshness(at("2026-11-06T09:59:59.999Z"), now, SCHEDULE), "delayed");
-  assert.equal(freshness(at("2026-11-04T10:05:00Z"), now, SCHEDULE), "delayed");
-  assert.equal(freshness(null, now, SCHEDULE), "delayed");
-});
-
-test("today's posting keeps the state live for the rest of the day", () => {
-  assert.equal(freshness(at("2026-11-07T10:00:07Z"), at("2026-11-07T23:59:59Z"), SCHEDULE), "live");
-});
-
-test("a very old, missing or future timestamp", () => {
-  const old = at("2020-01-01T00:00:00Z");
-  assert.equal(freshness(old, at("2026-11-07T15:00:00Z"), SCHEDULE), "delayed");
-  assert.equal(freshness(old, at("2026-11-07T11:00:00Z"), SCHEDULE), "delayed");
-  assert.equal(freshness(null, at("2026-11-07T15:00:00Z"), SCHEDULE), "delayed");
-  assert.equal(freshness(at("2026-11-08T10:00:00Z"), at("2026-11-07T15:00:00Z"), SCHEDULE), "live");
-});
-
-test("delayedAt is the end of the grace period that would pass without a newer posting", () => {
-  assert.equal(delayedAt(at("2026-11-06T10:00:07Z"), at("2026-11-07T08:00:00Z"), SCHEDULE).toISOString(), "2026-11-07T13:00:00.000Z");
-  assert.equal(delayedAt(at("2026-11-06T10:00:07Z"), at("2026-11-07T11:00:00Z"), SCHEDULE).toISOString(), "2026-11-07T13:00:00.000Z");
-  assert.equal(delayedAt(at("2026-11-07T10:00:07Z"), at("2026-11-07T11:00:00Z"), SCHEDULE).toISOString(), "2026-11-08T13:00:00.000Z");
-  assert.equal(delayedAt(at("2026-11-05T10:00:07Z"), at("2026-11-07T08:00:00Z"), SCHEDULE), null);
-  assert.equal(delayedAt(at("2026-11-06T10:00:00Z"), at("2026-11-07T10:00:00Z"), SCHEDULE).toISOString(), "2026-11-07T13:00:00.000Z");
-  assert.equal(delayedAt(at("2026-11-04T10:05:00Z"), at("2026-11-07T11:00:00Z"), SCHEDULE), null);
-  assert.equal(delayedAt(null, at("2026-11-07T11:00:00Z"), SCHEDULE), null);
+test("the timer fires when the newest posting reaches 27 hours old, capped at the setTimeout maximum", () => {
+  assert.equal(msUntilDelayed(ago(26 * HOUR + 59 * MINUTE), NOW, LIVE_WINDOW_MS), MINUTE);
+  assert.equal(msUntilDelayed(ago(0), NOW, LIVE_WINDOW_MS), 27 * HOUR);
+  assert.equal(msUntilDelayed(ago(-2 * HOUR), NOW, LIVE_WINDOW_MS), 29 * HOUR);
+  assert.equal(msUntilDelayed(ago(-60 * 24 * HOUR), NOW, LIVE_WINDOW_MS), MAX_TIMEOUT_MS);
+  assert.equal(msUntilDelayed(ago(27 * HOUR), NOW, LIVE_WINDOW_MS), null);
+  assert.equal(msUntilDelayed(ago(3 * 24 * HOUR), NOW, LIVE_WINDOW_MS), null);
+  assert.equal(msUntilDelayed(null, NOW, LIVE_WINDOW_MS), null);
 });
