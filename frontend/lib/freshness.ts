@@ -30,13 +30,16 @@ export function expectedPublishAt(now: Date, schedule: PublishSchedule): Date {
 
 /**
  * Live when the newest posting is at or after the most recent expected publish time, or while now is inside the
- * grace period after it (the end of the grace period itself counts as passed). Delayed otherwise, including when
- * there is no timestamp.
+ * grace period after it and the newest posting is at or after the previous expected publish time (the end of the
+ * grace period itself counts as passed). Delayed otherwise, including when there is no timestamp.
  */
 export function freshness(lastPublished: Date | null, now: Date, schedule: PublishSchedule): Freshness {
+  if (!lastPublished) return "delayed";
   const expected = expectedPublishAt(now, schedule).getTime();
-  if (lastPublished && lastPublished.getTime() >= expected) return "live";
-  return now.getTime() < expected + schedule.graceHours * HOUR_MS ? "live" : "delayed";
+  const last = lastPublished.getTime();
+  if (last >= expected) return "live";
+  const inGrace = now.getTime() < expected + schedule.graceHours * HOUR_MS;
+  return inGrace && last >= expected - DAY_MS ? "live" : "delayed";
 }
 
 /** When a live state turns delayed if nothing newer is published; null when it is already delayed. */

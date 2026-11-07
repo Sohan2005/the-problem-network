@@ -50,6 +50,15 @@ test("exact boundaries: publish time, a posting at that instant, and the end of 
   assert.equal(freshness(at("2026-11-07T09:59:59.999Z"), at("2026-11-07T13:00:00Z"), SCHEDULE), "delayed");
 });
 
+test("inside the grace window, Live needs a posting at or after yesterday's publish time", () => {
+  const now = at("2026-11-07T11:00:00Z");
+  assert.equal(freshness(at("2026-11-06T10:05:00Z"), now, SCHEDULE), "live");
+  assert.equal(freshness(at("2026-11-06T10:00:00Z"), now, SCHEDULE), "live");
+  assert.equal(freshness(at("2026-11-06T09:59:59.999Z"), now, SCHEDULE), "delayed");
+  assert.equal(freshness(at("2026-11-04T10:05:00Z"), now, SCHEDULE), "delayed");
+  assert.equal(freshness(null, now, SCHEDULE), "delayed");
+});
+
 test("today's posting keeps the state live for the rest of the day", () => {
   assert.equal(freshness(at("2026-11-07T10:00:07Z"), at("2026-11-07T23:59:59Z"), SCHEDULE), "live");
 });
@@ -57,7 +66,7 @@ test("today's posting keeps the state live for the rest of the day", () => {
 test("a very old, missing or future timestamp", () => {
   const old = at("2020-01-01T00:00:00Z");
   assert.equal(freshness(old, at("2026-11-07T15:00:00Z"), SCHEDULE), "delayed");
-  assert.equal(freshness(old, at("2026-11-07T11:00:00Z"), SCHEDULE), "live");
+  assert.equal(freshness(old, at("2026-11-07T11:00:00Z"), SCHEDULE), "delayed");
   assert.equal(freshness(null, at("2026-11-07T15:00:00Z"), SCHEDULE), "delayed");
   assert.equal(freshness(at("2026-11-08T10:00:00Z"), at("2026-11-07T15:00:00Z"), SCHEDULE), "live");
 });
@@ -67,4 +76,7 @@ test("delayedAt is the end of the grace period that would pass without a newer p
   assert.equal(delayedAt(at("2026-11-06T10:00:07Z"), at("2026-11-07T11:00:00Z"), SCHEDULE).toISOString(), "2026-11-07T13:00:00.000Z");
   assert.equal(delayedAt(at("2026-11-07T10:00:07Z"), at("2026-11-07T11:00:00Z"), SCHEDULE).toISOString(), "2026-11-08T13:00:00.000Z");
   assert.equal(delayedAt(at("2026-11-05T10:00:07Z"), at("2026-11-07T08:00:00Z"), SCHEDULE), null);
+  assert.equal(delayedAt(at("2026-11-06T10:00:00Z"), at("2026-11-07T10:00:00Z"), SCHEDULE).toISOString(), "2026-11-07T13:00:00.000Z");
+  assert.equal(delayedAt(at("2026-11-04T10:05:00Z"), at("2026-11-07T11:00:00Z"), SCHEDULE), null);
+  assert.equal(delayedAt(null, at("2026-11-07T11:00:00Z"), SCHEDULE), null);
 });
