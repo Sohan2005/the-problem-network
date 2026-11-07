@@ -38,9 +38,9 @@ AI_UI_PATTERNS_TO_AVOID.md
 DECISION_CHANGE.md
 DESIGN-NETWORK2.md
 MAIN_GOAL (1).md
-PROGRESS.md
+/PROGRESS.md
 The_Problem_Network (1).md
-decision-log.md
+/decision-log.md
 docs/AI_UI_PATTERNS_TO_AVOID.md
 docs/DECISION_CHANGE.md
 
@@ -107,5 +107,4 @@ node_modules/
 *.log
 terraform.tfstate*
 
-.cursor/
 !.env.example
