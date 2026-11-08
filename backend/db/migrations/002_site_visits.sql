@@ -10,4 +10,12 @@ CREATE TABLE IF NOT EXISTS site_visits (
     visits bigint NOT NULL DEFAULT 0 CHECK (visits >= 0)
 );
 
+-- Grant api_reader access only where that role exists; databases without it are left unchanged.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'api_reader') THEN
+        GRANT SELECT, INSERT, UPDATE ON site_visits TO api_reader;
+    END IF;
+END $$;
+
 COMMIT;
