@@ -7,12 +7,14 @@ from unittest import mock
 
 os.environ.setdefault("DATABASE_URL", "postgresql://invalid:invalid@127.0.0.1:1/none")
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import event, inspect, text
 
 from db.models import Brief, Problem, RawIdea, Tag, brief_tags
 from db.queries import canonicalize_url, get_brief_by_id, list_all_briefs
 from main import create_app
+from rate_limit import GetRateLimitMiddleware, SlidingWindowLimiter, limiter_key
 from routes import briefs as briefs_routes
 from routes.briefs import TTLCache, get_db
 from tests.branch_db import RolledBackTestCase
@@ -625,6 +627,33 @@ class RateLimitTests(unittest.TestCase):
         self.assertEqual(blocked.json()["detail"], "Rate limit exceeded. Try again in a minute.")
         self.assertEqual(blocked.headers.get("retry-after"), "60")
         self.assertEqual(client.get("/health", headers={"X-Forwarded-For": "203.0.113.9"}).status_code, 200)
+
+    def limited_client(self, limit):
+        limiter = SlidingWindowLimiter(limit=limit, window_seconds=60)
+        app = FastAPI()
+        app.add_middleware(GetRateLimitMiddleware, limiter=limiter)
+        app.get("/ping")(lambda: {"ok": True})
+        return TestClient(app), limiter
+
+    def test_buckets_are_per_ip_and_keyed_by_a_salted_hash(self):
+        client, limiter = self.limited_client(limit=2)
+        first, second = {"X-Forwarded-For": "203.0.113.8"}, {"X-Forwarded-For": "198.51.100.4"}
+        self.assertEqual([client.get("/ping", headers=first).status_code for _ in range(3)], [200, 200, 429])
+        self.assertEqual([client.get("/ping", headers=second).status_code for _ in range(3)], [200, 200, 429])
+        self.assertEqual(set(limiter._hits), {limiter_key("203.0.113.8"), limiter_key("198.51.100.4")})
+        self.assertEqual(limiter_key("203.0.113.8"), limiter_key("203.0.113.8"))
+        for key in limiter._hits:
+            self.assertNotIn("203.0.113.8", key)
+            self.assertNotIn("198.51.100.4", key)
+
+    def test_raw_ip_is_not_in_the_429_response(self):
+        client, _ = self.limited_client(limit=1)
+        headers = {"X-Forwarded-For": "203.0.113.8"}
+        client.get("/ping", headers=headers)
+        blocked = client.get("/ping", headers=headers)
+        self.assertEqual(blocked.status_code, 429)
+        self.assertNotIn("203.0.113.8", blocked.text)
+        self.assertNotIn("203.0.113.8", " ".join(f"{k}: {v}" for k, v in blocked.headers.items()))
 
 
 if __name__ == "__main__":

@@ -93,6 +93,17 @@ export async function fetchBriefStats(): Promise<{
   return response.json();
 }
 
+/** Fire-and-forget visit ping: no body, no credentials, failures ignored. */
+export function sendVisit(): void {
+  fetch(`${API_URL}/visits`, { method: "POST", keepalive: true, credentials: "omit" }).catch(() => {});
+}
+
+export async function fetchVisitCount(): Promise<{ total: number; today: number }> {
+  const response = await fetch(`${API_URL}/visits/count`);
+  if (!response.ok) throw new Error("Failed to fetch visit count");
+  return response.json();
+}
+
 export async function fetchBriefById(id: number): Promise<BriefDetail | null> {
   const response = await fetch(`${API_URL}/briefs/${id}`);
   if (response.status === 404) return null;

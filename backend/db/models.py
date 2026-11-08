@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, Date, ForeignKey, Table, Boolean, JSON, Float, Numeric, CheckConstraint, func
+from sqlalchemy import BigInteger, Column, Integer, String, Text, DateTime, Date, ForeignKey, Table, Boolean, JSON, Float, Numeric, CheckConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, declarative_base, deferred
 from datetime import datetime
@@ -129,6 +129,12 @@ class PublishDay(Base):
     buffer_before = Column(Integer, nullable=True)
     buffer_after = Column(Integer, nullable=True)
     note = Column(Text, nullable=True)
+
+class SiteVisit(Base):
+    __tablename__ = "site_visits"
+
+    day = Column(Date, primary_key=True)
+    visits = Column(BigInteger, nullable=False, default=0)
 
 class PipelineRun(Base):
     __tablename__ = "pipeline_runs"

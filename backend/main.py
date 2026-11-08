@@ -5,9 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from rate_limit import GetRateLimitMiddleware
 from routes.briefs import router as briefs_router
+from routes.visits import router as visits_router
 
 _DEFAULT_ORIGIN = "http://localhost:3000"
-_ALLOWED_METHODS = ["GET", "OPTIONS"]
+_ALLOWED_METHODS = ["GET", "POST", "OPTIONS"]
 _ALLOWED_HEADERS = ["Accept", "Content-Type"]
 
 
@@ -39,6 +40,7 @@ def create_app() -> FastAPI:
         allow_headers=_ALLOWED_HEADERS,
     )
     app.include_router(briefs_router)
+    app.include_router(visits_router)
     if os.getenv("ENABLE_ADMIN_ROUTES") == "1":
         from routes.admin import router as admin_router
         app.include_router(admin_router)

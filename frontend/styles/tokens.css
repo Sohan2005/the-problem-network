@@ -26,8 +26,8 @@
   --space-6: 64px;
 
   /* Typography Tokens (IBM Plex Sans) */
-  --font-heading: 'IBM Plex Sans Variable', sans-serif;
-  --font-body: 'IBM Plex Sans Variable', sans-serif;
+  --font-heading: var(--font-plex), sans-serif;
+  --font-body: var(--font-plex), sans-serif;
   --weight-regular: 400;
   --weight-medium: 500;
   --weight-bold: 700;

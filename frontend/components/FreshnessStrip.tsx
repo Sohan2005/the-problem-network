@@ -5,6 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchBriefStats } from "@/lib/api";
 import { freshness, msUntilDelayed, parseUtcTimestamp } from "@/lib/freshness";
 import { LIVE_WINDOW_MS } from "@/lib/publishSchedule";
+import VisitCounter from "@/components/VisitCounter";
 
 const STATUS = {
   live: { label: "Live", dot: "bg-accent-hover" },
@@ -86,6 +87,8 @@ export default function FreshnessStrip() {
         </div>
         <span className="text-text-muted text-small">{status.label}</span>
       </div>
+
+      <VisitCounter />
 
       {stats && (
         <>

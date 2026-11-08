@@ -1,9 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Giscus from "@giscus/react";
+import dynamic from "next/dynamic";
+import { Button } from "@/components/ui/button";
+
+// Loaded only after "Show comments": nothing is requested from GitHub or giscus.app before the click.
+const Giscus = dynamic(() => import("@giscus/react"), { ssr: false });
 
 export default function Comments() {
+  const [shown, setShown] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
 
   useEffect(() => {
@@ -46,6 +51,17 @@ export default function Comments() {
       window.removeEventListener('themeChange', handleThemeChange as EventListener);
     };
   }, []);
+
+  if (!shown) {
+    return (
+      <div className="mt-8">
+        <Button variant="secondary" onClick={() => setShown(true)}>
+          Show comments
+        </Button>
+        <p className="text-small text-text-muted mt-2">Comments load from GitHub only after you click.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="mt-8">

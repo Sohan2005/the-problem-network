@@ -230,7 +230,10 @@ export default function BriefDetailPage() {
       <footer className="border-t border-border bg-bg-alt py-6 mt-8">
         <div className="max-w-7xl mx-auto px-4 text-center text-text-muted text-sm">
           <p className="mb-2">The Problem Network — Translating real-world technical problems into junior-dev-friendly postings</p>
-          <a href="/privacy" className="text-accent hover:text-accent-hover transition-colors">Privacy</a>
+          <p>
+            No cookies: visits are counted only as an anonymous daily total.{" "}
+            <a href="/privacy" className="text-accent hover:text-accent-hover transition-colors">Privacy</a>
+          </p>
         </div>
       </footer>
     </div>

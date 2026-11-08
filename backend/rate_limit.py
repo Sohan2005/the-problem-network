@@ -1,3 +1,5 @@
+import hashlib
+import secrets
 import time
 from collections import defaultdict, deque
 from threading import Lock
@@ -9,6 +11,7 @@ from starlette.responses import JSONResponse
 
 GET_LIMIT = 60
 WINDOW_SECONDS = 60
+_LIMITER_SALT = secrets.token_bytes(16)
 
 
 def client_ip(request: Request) -> str:
@@ -23,8 +26,13 @@ def client_ip(request: Request) -> str:
     return "unknown"
 
 
+def limiter_key(ip: str) -> str:
+    """The caller's IP hashed with a per-process random salt, so no limiter ever holds a raw address."""
+    return hashlib.sha256(_LIMITER_SALT + ip.encode()).hexdigest()
+
+
 class SlidingWindowLimiter:
-    """In-process limit of GET_LIMIT hits per IP per WINDOW_SECONDS."""
+    """In-process limit of GET_LIMIT hits per key (a limiter_key, never a raw IP) per WINDOW_SECONDS."""
 
     def __init__(self, limit: int = GET_LIMIT, window_seconds: float = WINDOW_SECONDS):
         self.limit = limit
@@ -50,7 +58,7 @@ class GetRateLimitMiddleware(BaseHTTPMiddleware):
         self.limiter = limiter or SlidingWindowLimiter()
 
     async def dispatch(self, request: Request, call_next):
-        if request.method == "GET" and not self.limiter.allow(client_ip(request)):
+        if request.method == "GET" and not self.limiter.allow(limiter_key(client_ip(request))):
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Rate limit exceeded. Try again in a minute."},

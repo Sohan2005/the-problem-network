@@ -1,6 +1,15 @@
 import type { Metadata } from "next";
+import { IBM_Plex_Sans } from "next/font/google";
 import { Providers } from "./providers";
 import "../styles/tokens.css";
+
+// next/font downloads the files at build time and serves them from this site; no request goes to Google at page load.
+const plexSans = IBM_Plex_Sans({
+  subsets: ["latin"],
+  weight: ["400", "500", "700"],
+  display: "swap",
+  variable: "--font-plex",
+});
 
 export const metadata: Metadata = {
   title: "The Problem Network",
@@ -21,12 +30,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className={`${plexSans.variable} ${plexSans.className}`} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;700;800&display=swap" rel="stylesheet" />
       </head>
       <body>
         <Providers>{children}</Providers>

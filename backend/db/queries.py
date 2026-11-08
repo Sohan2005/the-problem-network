@@ -97,6 +97,29 @@ def get_brief_stats(db: Session):
         "last_updated": last_updated.isoformat() if last_updated else None
     }
 
+VISIT_INCREMENT_SQL = (
+    "INSERT INTO site_visits (day, visits) VALUES (:day, 1) "
+    "ON CONFLICT (day) DO UPDATE SET visits = site_visits.visits + 1"
+)
+
+def record_visit(db: Session, day):
+    """
+    Add one visit to day's row. A single upsert statement: the row lock taken by ON CONFLICT DO UPDATE serializes
+    concurrent requests, so no increment is lost.
+    """
+    from sqlalchemy import text
+    db.execute(text(VISIT_INCREMENT_SQL), {"day": day})
+    db.commit()
+
+def get_visit_counts(db: Session, today):
+    """Total visits over every day and visits on today, in one query."""
+    from sqlalchemy import text
+    total, on_day = db.execute(
+        text("SELECT coalesce(sum(visits), 0), coalesce(sum(visits) FILTER (WHERE day = :today), 0) FROM site_visits"),
+        {"today": today},
+    ).one()
+    return {"total": int(total), "today": int(on_day)}
+
 def create_raw_idea(db: Session, source: str, source_url: str, raw_title: str, raw_text: str, author: str = None):
     from .models import RawIdea
     idea = RawIdea(
