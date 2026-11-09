@@ -57,7 +57,8 @@ export default function CategoryNav({ active, counts, layout }: CategoryNavProps
   if (layout === "chips") {
     return (
       <nav aria-label="Categories" className="lg:hidden -mx-4 mb-4">
-        <ul className="flex gap-2 overflow-x-auto px-4 py-1">{links}</ul>
+        {/* relative: the sr-only count suffixes are absolutely positioned and would otherwise widen the page */}
+        <ul className="relative flex gap-2 overflow-x-auto px-4 py-1">{links}</ul>
       </nav>
     );
   }
