@@ -45,7 +45,7 @@ def get_problem_by_url(db: Session, source_url: str):
     return db.query(Problem).filter(Problem.source_url == source_url).first()
 
 # Never add embedding here: it is about 39 KB per brief and the API does not return it.
-LIST_COLUMNS = ("id", "title", "difficulty", "core_task", "recommended_stack")
+LIST_COLUMNS = ("id", "title", "difficulty", "core_task", "recommended_stack", "importance")
 DETAIL_COLUMNS = LIST_COLUMNS + ("target_user", "suggested_features", "learning_outcomes", "what_youll_need", "how_to_begin")
 
 

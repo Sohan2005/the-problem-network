@@ -16,8 +16,6 @@ from rate_limit import SlidingWindowLimiter
 from tests.branch_db import RolledBackTestCase
 from tests.test_hosting import CACHE_CONTROL, build_app
 
-MIGRATION = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "db", "migrations",
-                         "002_site_visits.sql")
 CHROME = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
           "Chrome/131.0.0.0 Safari/537.36")
 FIREFOX = "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0"
@@ -122,13 +120,6 @@ class IncrementSqlTests(unittest.TestCase):
 
 
 class VisitBranchTests(RolledBackTestCase):
-    def setUp(self):
-        super().setUp()
-        with open(MIGRATION, encoding="utf-8") as f:
-            body = "\n".join(line for line in f.read().splitlines() if line.strip() not in ("BEGIN;", "COMMIT;"))
-        self.assertNotIn("COMMIT", body.upper())
-        self.conn.exec_driver_sql(body)
-
     def test_increments_accumulate_per_day_and_in_total(self):
         before = get_visit_counts(self.db, TODAY)
         for _ in range(3):

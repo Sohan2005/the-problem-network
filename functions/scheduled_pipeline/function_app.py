@@ -14,6 +14,7 @@ if backend_path not in sys.path:
 app = func.FunctionApp()
 
 PIPELINE_BUDGET_SECONDS = 8 * 60
+IMPORTANCE_BUDGET_SECONDS = 2 * 60
 
 def automation_enabled() -> bool:
     """The automated pipeline runs only when AUTOMATION_ENABLED is exactly 'true'."""
@@ -36,13 +37,15 @@ def pipeline_tick_timer(myTimer: func.TimerRequest) -> None:
         return
 
     from db.database import SessionLocal
+    from pipeline import importance
     from pipeline.extract import GeminiClient
     from pipeline.gates import GeminiEmbedClient, RequestsFetcher
     from pipeline.orchestrator import run_pipeline
 
     db = SessionLocal()
     try:
-        summary = run_pipeline(db, GeminiClient(), GeminiEmbedClient(), RequestsFetcher(), PIPELINE_BUDGET_SECONDS)
+        summary = run_pipeline(db, GeminiClient(), GeminiEmbedClient(), RequestsFetcher(), PIPELINE_BUDGET_SECONDS,
+                               importance_client=importance.default_client())
         logging.info(f"Pipeline tick finished: status={summary['status']} buffer={summary['buffer']} "
                      f"failed_stages={summary['failed_stages']} note={summary['error']}")
     except Exception as e:
@@ -96,7 +99,8 @@ def daily_publish_timer(myTimer: func.TimerRequest) -> None:
     """
     Azure Function Timer Trigger for daily publishing.
     Runs daily at 10:00 AM UTC (1 hour after extraction).
-    With AUTOMATION_ENABLED 'true': publishes gate-passed ideas through pipeline/publish.py.
+    With AUTOMATION_ENABLED 'true': publishes gate-passed ideas through pipeline/publish.py, then rates the new
+    briefs' importance (a rating failure is logged and never fails the publish; pipeline_tick retries).
     Otherwise: promotes up to 5 ready_to_publish records to briefs table.
     """
     if myTimer.past_due:
@@ -105,7 +109,9 @@ def daily_publish_timer(myTimer: func.TimerRequest) -> None:
     if automation_enabled():
         logging.info('Starting automated publish...')
         from db.database import SessionLocal
+        from pipeline import importance
         from pipeline.gates import GeminiEmbedClient
+        from pipeline.orchestrator import rate_importance
         from pipeline.publish import run_publish
 
         db = SessionLocal()
@@ -116,7 +122,16 @@ def daily_publish_timer(myTimer: func.TimerRequest) -> None:
                          f"buffer_after={summary.get('buffer_after')}")
         except Exception as e:
             logging.error(f'Automated publish failed: {safe_message(e)}')
+            db.close()
             raise
+        try:
+            if summary.get("published"):
+                rated = rate_importance(db, importance.default_client(), summary["published"], IMPORTANCE_BUDGET_SECONDS)
+                logging.info(f"Importance rating finished: status={rated['status']} rated={rated.get('rated')} "
+                             f"note={rated.get('error') or rated.get('reason')}")
+        except Exception as e:
+            db.rollback()
+            logging.warning(f'Importance rating failed: {safe_message(e)}')
         finally:
             db.close()
         return

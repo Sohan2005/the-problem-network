@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { getFavorites, toggleFavorite, isFavorite } from "@/lib/favorites";
 import Comments from "@/components/Comments";
 import TitleMark from "@/components/TitleMark";
+import { IMPORTANCE_TOOLTIP, importanceLabel } from "@/lib/importance";
 
 export default function BriefDetailPage() {
   const params = useParams();
@@ -119,9 +120,12 @@ export default function BriefDetailPage() {
           </Button>
         </div>
 
-        {/* Difficulty Badge */}
-        <div className="mb-6">
+        {/* Difficulty and Importance Badges */}
+        <div className="mb-6 flex flex-wrap gap-2">
           <Badge variant={getDifficultyVariant(brief.difficulty)}>{brief.difficulty}</Badge>
+          {importanceLabel(brief.importance) && (
+            <Badge variant="default" title={IMPORTANCE_TOOLTIP}>{importanceLabel(brief.importance)}</Badge>
+          )}
         </div>
 
         {/* Problem Overview */}

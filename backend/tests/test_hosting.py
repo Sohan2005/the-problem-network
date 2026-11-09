@@ -57,7 +57,7 @@ def detail_row(**overrides):
         "id": 7, "title": "Route tracker", "difficulty": "beginner", "core_task": "Climbers lose track.",
         "recommended_stack": ["Python"], "target_user": "Climbers", "suggested_features": ["Log"],
         "learning_outcomes": ["SQL"], "what_youll_need": "- Python", "how_to_begin": "1. Start",
-        "problem": None, "raw_idea": None, "tags": [],
+        "problem": None, "raw_idea": None, "tags": [], "importance": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -147,9 +147,10 @@ class DocsTests(unittest.TestCase):
             self.assertEqual(client.get(path).status_code, 404, path)
 
 
-def card_row(id, stack=None, title="T", core_task="C", difficulty="beginner", raw_source="hackernews"):
+def card_row(id, stack=None, title="T", core_task="C", difficulty="beginner", raw_source="hackernews", importance=None):
     return SimpleNamespace(id=id, title=title, difficulty=difficulty, core_task=core_task,
-                           recommended_stack=stack if stack is not None else ["Python"], raw_source=raw_source)
+                           recommended_stack=stack if stack is not None else ["Python"], raw_source=raw_source,
+                           importance=importance)
 
 
 class ListBriefsTests(unittest.TestCase):
@@ -166,7 +167,7 @@ class ListBriefsTests(unittest.TestCase):
         db = RecordingSession()
         list_all_briefs(db)
         self.assertEqual([column.key for column in db.query_obj.columns],
-                         ["id", "title", "difficulty", "core_task", "recommended_stack", "raw_source"])
+                         ["id", "title", "difficulty", "core_task", "recommended_stack", "importance", "raw_source"])
         self.assertEqual(db.query_obj.joins, [RawIdea])
 
     def test_route_pages_the_snapshot_and_sets_cache_header(self):
@@ -193,13 +194,14 @@ class ListBriefsTests(unittest.TestCase):
 
 class BriefRouteTests(unittest.TestCase):
     def test_list_marks_ai_sources_and_returns_no_tags(self):
-        card = {"title": "T", "difficulty": "beginner", "core_task": "C", "recommended_stack": ["Go"]}
+        card = {"title": "T", "difficulty": "beginner", "core_task": "C", "recommended_stack": ["Go"], "importance": None}
         rows = [SimpleNamespace(id=1, raw_source="hackernews", **card), SimpleNamespace(id=2, raw_source="ai_suggested", **card),
                 SimpleNamespace(id=3, raw_source=None, **card)]
         with mock.patch("routes.briefs.list_all_briefs", return_value=rows):
             body = fake_db_client().get("/briefs/").json()["items"]
         self.assertEqual([item["has_title_mark"] for item in body], [False, True, False])
-        self.assertEqual(set(body[0]), {"id", "title", "difficulty", "core_task", "recommended_stack", "has_title_mark"})
+        self.assertEqual(set(body[0]), {"id", "title", "difficulty", "core_task", "recommended_stack", "importance",
+                                        "has_title_mark"})
 
     def test_detail_links_real_sources_and_returns_tags(self):
         url = "https://news.ycombinator.com/item?id=1"
@@ -340,7 +342,8 @@ class SearchTests(unittest.TestCase):
         card_row(4, ["Kotlin/Java"]),
         card_row(5, ["Go"]),
         card_row(6, ["MongoDB", "Web development"], core_task="Track gigs for musicians."),
-        SimpleNamespace(id=7, title="Empty", difficulty="beginner", core_task="C", recommended_stack=None, raw_source=None),
+        SimpleNamespace(id=7, title="Empty", difficulty="beginner", core_task="C", recommended_stack=None, raw_source=None,
+                        importance=None),
     ]
 
     def ids(self, query):

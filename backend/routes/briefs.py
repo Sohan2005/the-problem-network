@@ -141,14 +141,15 @@ def get_stats(response: Response, db: Session = Depends(get_db)):
     return snapshot_cache.get(("stats",), lambda: get_brief_stats(db), in_new_session(get_brief_stats))
 
 @router.get("/")
-def get_briefs(response: Response, difficulty: Optional[str] = Query(None), tag: Optional[str] = Query(None), search: Optional[str] = Query(None), sort: Optional[str] = Query(None), ids: Optional[str] = Query(None), limit: int = Query(DEFAULT_PAGE_SIZE, ge=1), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
+def get_briefs(response: Response, difficulty: Optional[str] = Query(None), importance: Optional[str] = Query(None), tag: Optional[str] = Query(None), search: Optional[str] = Query(None), sort: Optional[str] = Query(None), ids: Optional[str] = Query(None), limit: int = Query(DEFAULT_PAGE_SIZE, ge=1), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
     """
     One page of cards and the number that match. Filters, search, sort and ids (comma-separated brief ids) run over
     every brief in the cached snapshot before the page is sliced; limit is capped at MAX_PAGE_SIZE.
     """
     response.headers["Cache-Control"] = CACHE_CONTROL
     entries = snapshot_cache.get(SNAPSHOT_KEY, lambda: card_snapshot(db), in_new_session(card_snapshot))
-    cards = select_cards(entries, difficulty=difficulty, tag=tag, search=search, sort=sort, ids=parse_ids(ids))
+    cards = select_cards(entries, difficulty=difficulty, importance=importance, tag=tag, search=search, sort=sort,
+                         ids=parse_ids(ids))
     size = min(limit, MAX_PAGE_SIZE)
     items = cards[offset:offset + size]
     return {"items": items, "total": len(cards), "offset": offset, "limit": size, "has_more": offset + len(items) < len(cards)}
@@ -168,6 +169,7 @@ class CardEntry(NamedTuple):
     difficulty: str
     stack_words: frozenset
     search_words: frozenset
+    importance: str = ""
 
 def card_snapshot(db: Session) -> list:
     """Every brief as a CardEntry, newest first. One query; the result is cached for every filter, sort and page."""
@@ -176,21 +178,23 @@ def card_snapshot(db: Session) -> list:
         stack = card["recommended_stack"] if isinstance(card["recommended_stack"], list) else []
         stack_words = words(*stack)
         entries.append(CardEntry(card, (card["difficulty"] or "").lower(), stack_words,
-                                 stack_words | words(card["title"], card["core_task"])))
+                                 stack_words | words(card["title"], card["core_task"]), card["importance"] or ""))
     return entries
 
-def select_cards(entries, difficulty=None, tag=None, search=None, sort=None, ids=None) -> list:
+def select_cards(entries, difficulty=None, importance=None, tag=None, search=None, sort=None, ids=None) -> list:
     """
-    Cards matching every filter: ids (when not None), difficulty (any case), tag terms against the stack, search terms
-    against title, core task and stack. Newest first unless sort is difficulty_asc (then id ascending) or
-    difficulty_desc (then id descending).
+    Cards matching every filter: ids (when not None), difficulty and importance (any case; unrated briefs match no
+    importance), tag terms against the stack, search terms against title, core task and stack. Newest first unless
+    sort is difficulty_asc (then id ascending) or difficulty_desc (then id descending).
     """
     level = difficulty.lower() if difficulty else None
+    importance_level = importance.lower() if importance else None
     stack_terms, search_terms = terms(tag), terms(search)
     chosen = [
         entry for entry in entries
         if (ids is None or entry.card["id"] in ids)
         and (level is None or entry.difficulty == level)
+        and (importance_level is None or entry.importance == importance_level)
         and matches_all(stack_terms, entry.stack_words)
         and matches_all(search_terms, entry.search_words)
     ]
@@ -208,6 +212,7 @@ def brief_cards(briefs) -> list:
             "difficulty": b.difficulty,
             "core_task": b.core_task,
             "recommended_stack": b.recommended_stack,
+            "importance": b.importance,
             "has_title_mark": b.raw_source in AI_SOURCES,
         }
         for b in briefs
@@ -237,6 +242,7 @@ def brief_detail(db: Session, brief_id: int) -> Optional[dict]:
         "learning_outcomes": brief.learning_outcomes,
         "what_youll_need": brief.what_youll_need,
         "how_to_begin": brief.how_to_begin,
+        "importance": brief.importance,
         "tags": [t.name for t in brief.tags],
         "source_url": source_link(source.source, source.source_url) if source else None,
         "source_platform": source.source if source else None,

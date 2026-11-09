@@ -11,7 +11,7 @@ import Navbar from "@/components/Navbar";
 import { Button } from "@/components/ui/button";
 
 export default function Home() {
-  const { difficulty, tag, searchQuery, sortBy, setSearchQuery, setSortBy, setTag, clearFilters } = useFilterStore();
+  const { difficulty, importance, tag, searchQuery, sortBy, setSearchQuery, setSortBy, setTag, clearFilters } = useFilterStore();
   const [localSearch, setLocalSearch] = useState("");
 
   // Debounced search
@@ -35,9 +35,10 @@ export default function Home() {
 
   // gcTime 0 drops the pages of a previous filter combination, so returning to it starts again at the first page.
   const { data, isLoading, error, fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError } = useInfiniteQuery({
-    queryKey: ["briefs", difficulty, tag, searchQuery, sortBy],
+    queryKey: ["briefs", difficulty, importance, tag, searchQuery, sortBy],
     queryFn: ({ pageParam }) => fetchBriefPage({
       difficulty: difficulty || undefined,
+      importance: importance || undefined,
       tag: tag || undefined,
       search: searchQuery || undefined,
       sort: sortBy || undefined,

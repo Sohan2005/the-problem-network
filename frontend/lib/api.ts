@@ -13,6 +13,7 @@ export interface Brief {
   core_task: string;
   recommended_stack: string[] | null;
   has_title_mark?: boolean;
+  importance?: string | null;
 }
 
 export interface BriefDetail extends Brief {
@@ -36,6 +37,7 @@ export interface BriefPage {
 
 export interface BriefPageParams {
   difficulty?: string;
+  importance?: string;
   tag?: string;
   search?: string;
   sort?: string;
@@ -48,6 +50,7 @@ export async function fetchBriefPage(params: BriefPageParams = {}): Promise<Brie
   const limit = params.limit ?? PAGE_SIZE;
   const queryParams = new URLSearchParams();
   if (params.difficulty) queryParams.append("difficulty", params.difficulty);
+  if (params.importance) queryParams.append("importance", params.importance);
   if (params.tag) queryParams.append("tag", params.tag);
   if (params.search) queryParams.append("search", params.search);
   if (params.sort) queryParams.append("sort", params.sort);

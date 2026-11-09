@@ -8,6 +8,8 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Migrations newer than the test branch: applied inside every test's transaction, so they vanish with the rollback.
+IN_TEST_MIGRATIONS = ("002_site_visits.sql", "003_brief_importance.sql")
 _engine = None
 
 def branch_engine():
@@ -29,12 +31,25 @@ def branch_engine():
     _engine = engine
     return _engine
 
+def migration_body(name: str) -> str:
+    """A migration file without its BEGIN; and COMMIT; lines, to run inside an open transaction."""
+    with open(os.path.join(BACKEND_DIR, "db", "migrations", name), encoding="utf-8") as f:
+        body = "\n".join(line for line in f.read().splitlines() if line.strip() not in ("BEGIN;", "COMMIT;"))
+    if "COMMIT" in body.upper():
+        raise AssertionError(f"{name} would commit inside the test transaction")
+    return body
+
 class RolledBackTestCase(unittest.TestCase):
-    """Gives each test self.conn and self.db (a Session whose commits become savepoints), all rolled back afterwards."""
+    """
+    Gives each test self.conn and self.db (a Session whose commits become savepoints), all rolled back afterwards.
+    IN_TEST_MIGRATIONS are applied first, inside the same transaction.
+    """
 
     def setUp(self):
         self.conn = branch_engine().connect()
         self.trans = self.conn.begin()
+        for name in IN_TEST_MIGRATIONS:
+            self.conn.exec_driver_sql(migration_body(name))
         self.db = Session(bind=self.conn, join_transaction_mode="create_savepoint")
 
     def tearDown(self):

@@ -10,6 +10,8 @@ day and 100 per minute. Free quotas reset at midnight Pacific, so both caps coun
 America/Los_Angeles calendar day:
 - EXTRACTION_DAILY_CAP: extraction calls per day, the sum of rows_in of today's 'extract' runs.
 - AI_IDEA_CALLS_PER_DAY: AI idea generation calls per day, one per today's AI_IDEAS_STAGE run.
+- IMPORTANCE_DAILY_CAP: importance rating calls per day, the sum of rows_in of today's 'importance' runs (the tick
+  rates at most IMPORTANCE_MAX_ITEMS unrated briefs; daily_publish rates the day's new briefs through the same cap).
 Extraction calls are at least extract.CALL_INTERVAL_SECONDS (5) apart, so at most 12 per minute; embedding calls of the
 default client are at least gates.EMBED_INTERVAL_SECONDS (0.6) apart, so at most 100 per minute across gates and publish.
 When a stage reports the quota exhausted, the remaining Gemini-using stages of the tick are skipped.
@@ -31,6 +33,7 @@ from ingestion import ai_ideas
 from llm.gemini import QuotaExhausted
 from pipeline.extract import run_extraction
 from pipeline.gates import run_gates
+from pipeline import importance
 from pipeline.ingest import safe_error
 from pipeline.prefilter import run_prefilter
 from pipeline.publish import BUFFER_TARGET, candidates_query
@@ -47,9 +50,12 @@ QUOTA_TIMEZONE = ZoneInfo("America/Los_Angeles")
 EXTRACTION_DAILY_CAP = 300
 AI_IDEA_CALLS_PER_DAY = 3
 AI_IDEAS_STAGE = "topup:ai_suggested"
+IMPORTANCE_MAX_ITEMS = 5
+IMPORTANCE_DAILY_CAP = 60
 
 # Share of the remaining budget each stage may use (ingest runs first, so it gets 45% of the whole tick).
-SHARE = {"ingest": 0.45, "prefilter": 0.05, "extract": 0.6, "gates": 0.5, "topup": 0.5, "extract_again": 0.6}
+SHARE = {"ingest": 0.45, "prefilter": 0.05, "extract": 0.6, "gates": 0.5, "importance": 0.2, "topup": 0.5,
+         "extract_again": 0.6}
 
 def buffer_size(db) -> int:
     return candidates_query(db).count()
@@ -65,6 +71,17 @@ def extraction_calls_today(db, now: datetime) -> int:
 def ai_idea_calls_today(db, now: datetime) -> int:
     return db.query(PipelineRun.id).filter(
         PipelineRun.stage == AI_IDEAS_STAGE, PipelineRun.started_at >= quota_day_start(now)).count()
+
+def importance_calls_today(db, now: datetime) -> int:
+    return int(db.query(func.coalesce(func.sum(PipelineRun.rows_in), 0)).filter(
+        PipelineRun.stage == importance.STAGE, PipelineRun.started_at >= quota_day_start(now)).scalar())
+
+def rate_importance(db, llm_client, max_items: int, budget_seconds: float) -> dict:
+    """run_importance for at most max_items briefs, within what is left of IMPORTANCE_DAILY_CAP today."""
+    allowed = IMPORTANCE_DAILY_CAP - importance_calls_today(db, datetime.now(timezone.utc))
+    if allowed <= 0:
+        return {"status": "skipped", "reason": f"daily importance cap {IMPORTANCE_DAILY_CAP} reached"}
+    return importance.run_importance(db, llm_client, min(max_items, allowed), budget_seconds)
 
 def topup_ai_ideas(db, *, llm_client, fetcher=None, budget_seconds) -> dict:
     """One AI idea call per top-up run, at most AI_IDEA_CALLS_PER_DAY per Pacific day; logs one AI_IDEAS_STAGE run per call."""
@@ -106,12 +123,13 @@ def _failed(result) -> bool:
     return any(isinstance(v, dict) and v.get("status") == "error" for v in result.values())
 
 def run_pipeline(db, llm_client, embed_client, fetcher, total_budget_seconds, *, sweep_options=None,
-                 extract_limit=None, gates_limit=None) -> dict:
+                 extract_limit=None, gates_limit=None, importance_client=None) -> dict:
     """
     Run one tick within total_budget_seconds and return a summary (stage results, buffer, status).
     sweep_options: keyword arguments for run_sweep (phrase and site limits, pending target, injected HTTP getters).
     extract_limit: at most this many rows extracted in the whole tick (extract and extract_again together).
     gates_limit: max_items for each gates stage instead of GATES_MAX_ITEMS.
+    importance_client: LLM client for rating unrated briefs; the importance stage is skipped without one.
     """
     gates_items = GATES_MAX_ITEMS if gates_limit is None else gates_limit
     deadline = time.monotonic() + total_budget_seconds
@@ -158,6 +176,9 @@ def run_pipeline(db, llm_client, embed_client, fetcher, total_budget_seconds, *,
     stage("prefilter", SHARE["prefilter"], lambda budget: run_prefilter(db, PREFILTER_MAX_ITEMS, budget))
     stage("extract", SHARE["extract"], extract, uses_gemini=True)
     stage("gates", SHARE["gates"], lambda budget: run_gates(db, embed_client, gates_items, budget), uses_gemini=True)
+    if importance_client is not None:
+        stage("importance", SHARE["importance"],
+              lambda budget: rate_importance(db, importance_client, IMPORTANCE_MAX_ITEMS, budget), uses_gemini=True)
 
     buffer = stage("buffer", 0, lambda _: buffer_size(db))
     topped_up = False

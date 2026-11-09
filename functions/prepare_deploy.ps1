@@ -24,6 +24,7 @@ $Files = @(
     "pipeline/prefilter.py",
     "pipeline/extract.py",
     "pipeline/gates.py",
+    "pipeline/importance.py",
     "pipeline/publish.py",
     "pipeline/orchestrator.py",
     "pipeline/sweep.py"

@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
 import { useFilterStore } from "@/lib/store";
+import { IMPORTANCE_FILTER_NOTE, IMPORTANCE_LEVELS } from "@/lib/importance";
 import { Button } from "@/components/ui/button";
 
 export default function FilterBar() {
-  const { difficulty, tag, setDifficulty, setTag, clearFilters } = useFilterStore();
+  const { difficulty, importance, tag, setDifficulty, setImportance, setTag, clearFilters } = useFilterStore();
   const [localTag, setLocalTag] = useState(tag || "");
 
   // Debounced tag filter
@@ -30,6 +31,23 @@ export default function FilterBar() {
         <option value="Intermediate">Intermediate</option>
         <option value="Advanced">Advanced</option>
       </select>
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={importance || ""}
+          onChange={(e) => setImportance(e.target.value || null)}
+          aria-label="Filter by real-world importance"
+          aria-describedby="importance-filter-note"
+          className="px-3 py-2 border border-border rounded-md bg-bg text-text min-h-[48px]"
+        >
+          <option value="">All Importance</option>
+          {IMPORTANCE_LEVELS.map((level) => (
+            <option key={level.value} value={level.value}>{level.label}</option>
+          ))}
+        </select>
+        <span id="importance-filter-note" className="text-small text-text-muted max-w-[260px]">
+          {IMPORTANCE_FILTER_NOTE}
+        </span>
+      </div>
       <input
         type="text"
         value={localTag}

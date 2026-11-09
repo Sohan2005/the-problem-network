@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import TitleMark from "@/components/TitleMark";
 import { getFavorites, toggleFavorite, isFavorite } from "@/lib/favorites";
+import { IMPORTANCE_TOOLTIP, importanceLabel } from "@/lib/importance";
 
 interface BriefCardProps {
   brief: Brief;
@@ -36,9 +37,12 @@ export default function BriefCard({ brief, onFavoriteChange }: BriefCardProps) {
           {brief.has_title_mark && <TitleMark />}
         </h3>
 
-        {/* Difficulty */}
-        <div className="mb-2">
+        {/* Difficulty and importance */}
+        <div className="mb-2 flex flex-wrap gap-1">
           <Badge variant="default">{brief.difficulty}</Badge>
+          {importanceLabel(brief.importance) && (
+            <Badge variant="default" title={IMPORTANCE_TOOLTIP}>{importanceLabel(brief.importance)}</Badge>
+          )}
         </div>
 
         {/* Short Description */}

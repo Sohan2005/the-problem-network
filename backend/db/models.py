@@ -42,6 +42,8 @@ class Brief(Base):
     how_to_begin = Column(Text, nullable=True)  # First 2-4 actionable steps to start the project
     source_date = Column(DateTime, nullable=True)  # Original post date for age tracking
     created_at = Column(DateTime, default=datetime.utcnow)
+    importance = Column(Text, nullable=True)  # high, medium or everyday; NULL until rated (migration 003)
+    importance_detail = Column(JSONB, nullable=True)
     # Deferred (about 39 KB per row as text): loaded only when the attribute is read or the column is selected.
     embedding = deferred(Column(Vector(3072), nullable=True))  # Updated to 3072 for gemini-embedding-001
     
