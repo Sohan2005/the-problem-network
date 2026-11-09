@@ -7,6 +7,7 @@ from typing import NamedTuple, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 from brief_search import matches_all, terms, words
+from categories import OTHER, SLUGS, classify
 from db.database import SessionLocal, get_db
 from db.queries import list_all_briefs, get_brief_by_id, get_brief_stats
 from pipeline.publish import AI_SOURCES, source_link
@@ -141,18 +142,20 @@ def get_stats(response: Response, db: Session = Depends(get_db)):
     return snapshot_cache.get(("stats",), lambda: get_brief_stats(db), in_new_session(get_brief_stats))
 
 @router.get("/")
-def get_briefs(response: Response, difficulty: Optional[str] = Query(None), importance: Optional[str] = Query(None), tag: Optional[str] = Query(None), search: Optional[str] = Query(None), sort: Optional[str] = Query(None), ids: Optional[str] = Query(None), limit: int = Query(DEFAULT_PAGE_SIZE, ge=1), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
+def get_briefs(response: Response, difficulty: Optional[str] = Query(None), importance: Optional[str] = Query(None), category: Optional[str] = Query(None), tag: Optional[str] = Query(None), search: Optional[str] = Query(None), sort: Optional[str] = Query(None), ids: Optional[str] = Query(None), limit: int = Query(DEFAULT_PAGE_SIZE, ge=1), offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
     """
     One page of cards and the number that match. Filters, search, sort and ids (comma-separated brief ids) run over
     every brief in the cached snapshot before the page is sliced; limit is capped at MAX_PAGE_SIZE.
+    category_counts has every category slug, counted with all filters except category.
     """
     response.headers["Cache-Control"] = CACHE_CONTROL
     entries = snapshot_cache.get(SNAPSHOT_KEY, lambda: card_snapshot(db), in_new_session(card_snapshot))
-    cards = select_cards(entries, difficulty=difficulty, importance=importance, tag=tag, search=search, sort=sort,
-                         ids=parse_ids(ids))
+    filters = {"difficulty": difficulty, "importance": importance, "tag": tag, "search": search, "ids": parse_ids(ids)}
+    cards = select_cards(entries, category=category, sort=sort, **filters)
     size = min(limit, MAX_PAGE_SIZE)
     items = cards[offset:offset + size]
-    return {"items": items, "total": len(cards), "offset": offset, "limit": size, "has_more": offset + len(items) < len(cards)}
+    return {"items": items, "total": len(cards), "offset": offset, "limit": size, "has_more": offset + len(items) < len(cards),
+            "category_counts": count_categories(entries, **filters)}
 
 def parse_ids(raw: Optional[str]) -> Optional[frozenset]:
     """The first MAX_IDS numbers in a comma-separated list (other parts are skipped); None when raw is None."""
@@ -170,6 +173,7 @@ class CardEntry(NamedTuple):
     stack_words: frozenset
     search_words: frozenset
     importance: str = ""
+    category: str = OTHER
 
 def card_snapshot(db: Session) -> list:
     """Every brief as a CardEntry, newest first. One query; the result is cached for every filter, sort and page."""
@@ -178,19 +182,19 @@ def card_snapshot(db: Session) -> list:
         stack = card["recommended_stack"] if isinstance(card["recommended_stack"], list) else []
         stack_words = words(*stack)
         entries.append(CardEntry(card, (card["difficulty"] or "").lower(), stack_words,
-                                 stack_words | words(card["title"], card["core_task"]), card["importance"] or ""))
+                                 stack_words | words(card["title"], card["core_task"]), card["importance"] or "",
+                                 card["category"]))
     return entries
 
-def select_cards(entries, difficulty=None, importance=None, tag=None, search=None, sort=None, ids=None) -> list:
+def filter_entries(entries, difficulty=None, importance=None, tag=None, search=None, ids=None) -> list:
     """
-    Cards matching every filter: ids (when not None), difficulty and importance (any case; unrated briefs match no
-    importance), tag terms against the stack, search terms against title, core task and stack. Newest first unless
-    sort is difficulty_asc (then id ascending) or difficulty_desc (then id descending).
+    Entries matching every filter, in snapshot order: ids (when not None), difficulty and importance (any case;
+    unrated briefs match no importance), tag terms against the stack, search terms against title, core task and stack.
     """
     level = difficulty.lower() if difficulty else None
     importance_level = importance.lower() if importance else None
     stack_terms, search_terms = terms(tag), terms(search)
-    chosen = [
+    return [
         entry for entry in entries
         if (ids is None or entry.card["id"] in ids)
         and (level is None or entry.difficulty == level)
@@ -198,6 +202,22 @@ def select_cards(entries, difficulty=None, importance=None, tag=None, search=Non
         and matches_all(stack_terms, entry.stack_words)
         and matches_all(search_terms, entry.search_words)
     ]
+
+def count_categories(entries, **filters) -> dict:
+    """Matching entries per category slug, every slug present (in SLUGS order), ignoring any category filter."""
+    counts = dict.fromkeys(SLUGS, 0)
+    for entry in filter_entries(entries, **filters):
+        counts[entry.category] += 1
+    return counts
+
+def select_cards(entries, difficulty=None, importance=None, category=None, tag=None, search=None, sort=None, ids=None) -> list:
+    """
+    Cards matching every filter of filter_entries and category (a slug, any case; an unknown slug matches nothing).
+    Newest first unless sort is difficulty_asc (then id ascending) or difficulty_desc (then id descending).
+    """
+    chosen = filter_entries(entries, difficulty=difficulty, importance=importance, tag=tag, search=search, ids=ids)
+    if category:
+        chosen = [entry for entry in chosen if entry.category == category.lower()]
     if sort == "difficulty_asc":
         chosen.sort(key=lambda entry: (DIFFICULTY_ASC.get(entry.difficulty, 4), entry.card["id"]))
     elif sort == "difficulty_desc":
@@ -213,6 +233,7 @@ def brief_cards(briefs) -> list:
             "core_task": b.core_task,
             "recommended_stack": b.recommended_stack,
             "importance": b.importance,
+            "category": classify(b.title, b.core_task, b.recommended_stack),
             "has_title_mark": b.raw_source in AI_SOURCES,
         }
         for b in briefs

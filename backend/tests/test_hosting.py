@@ -201,7 +201,7 @@ class BriefRouteTests(unittest.TestCase):
             body = fake_db_client().get("/briefs/").json()["items"]
         self.assertEqual([item["has_title_mark"] for item in body], [False, True, False])
         self.assertEqual(set(body[0]), {"id", "title", "difficulty", "core_task", "recommended_stack", "importance",
-                                        "has_title_mark"})
+                                        "category", "has_title_mark"})
 
     def test_detail_links_real_sources_and_returns_tags(self):
         url = "https://news.ycombinator.com/item?id=1"

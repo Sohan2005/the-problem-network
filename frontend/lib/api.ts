@@ -14,6 +14,7 @@ export interface Brief {
   recommended_stack: string[] | null;
   has_title_mark?: boolean;
   importance?: string | null;
+  category?: string;
 }
 
 export interface BriefDetail extends Brief {
@@ -33,11 +34,14 @@ export interface BriefPage {
   items: Brief[];
   total: number | null;
   hasMore: boolean;
+  // Postings per category slug for the other filters; null from an API without categories.
+  categoryCounts?: Record<string, number> | null;
 }
 
 export interface BriefPageParams {
   difficulty?: string;
   importance?: string;
+  category?: string;
   tag?: string;
   search?: string;
   sort?: string;
@@ -51,6 +55,7 @@ export async function fetchBriefPage(params: BriefPageParams = {}): Promise<Brie
   const queryParams = new URLSearchParams();
   if (params.difficulty) queryParams.append("difficulty", params.difficulty);
   if (params.importance) queryParams.append("importance", params.importance);
+  if (params.category) queryParams.append("category", params.category);
   if (params.tag) queryParams.append("tag", params.tag);
   if (params.search) queryParams.append("search", params.search);
   if (params.sort) queryParams.append("sort", params.sort);
@@ -70,7 +75,7 @@ export async function fetchBriefPage(params: BriefPageParams = {}): Promise<Brie
       ? { items: body.filter((brief: Brief) => ids.includes(brief.id)), total: null, hasMore: false }
       : { items: body, total: null, hasMore: body.length === limit };
   }
-  return { items: body.items, total: body.total, hasMore: body.has_more };
+  return { items: body.items, total: body.total, hasMore: body.has_more, categoryCounts: body.category_counts ?? null };
 }
 
 /** Items of every loaded page in order; a brief that moved to a later page between requests is kept once. */

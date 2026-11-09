@@ -43,7 +43,7 @@ The design rules for The Problem Network. Every color, space, size and duration 
 
 ## Pages
 
-- **Browse:** navbar, search, filters, sort, grid, Load more, footer.
+- **Browse:** navbar, category navigation, search, filters, sort, grid, Load more, footer.
 - **Posting:** navbar, title and favorite button, difficulty, problem overview, what you will build, recommended stack, getting started, learning outcomes, original source, tags, comments, footer.
 - **Saved:** navbar, "Saved Postings" heading, grid, Load more, empty state, footer.
 - Navigation: Browse and Saved.
@@ -56,6 +56,14 @@ The design rules for The Problem Network. Every color, space, size and duration 
 - The button is disabled and reads "Loading..." while loading. On failure a short message appears and the cards stay.
 - Changing the search, a filter or the sort goes back to the first page.
 
+## Categories
+
+- Every posting has one category. "All" comes first and is the default; it shows the unfiltered list.
+- Desktop (from 1024px): a 256px sidebar left of the list, one 48px-high link per category with its count.
+- Tablet and mobile: one horizontally scrolling row of chips between the filters and the sort.
+- The selected category uses the accent background with accent text and `aria-current="page"`. It is kept in the URL (`?category=`), so links and the back button work.
+- Counts follow the search, tech stack, difficulty and importance filters. "Other" is listed only when it has postings.
+
 ## Header strip
 
 - Order: "Live" chip, total chip ("174 postings"), "Updated" chip, then the line "New postings added every day".
@@ -65,4 +73,4 @@ The design rules for The Problem Network. Every color, space, size and duration 
 
 - Visitors always see "posting", never "brief". Code, the database and the API routes still use "brief".
 - Empty and error states say what happened and offer one next step. Examples: "Couldn't load this posting - check your connection and try again". Never "Something went wrong" or a raw error code.
-- Required empty states: no search results, nothing saved, no postings, loading, API unavailable, connection lost, first visit.
+- Required empty states: no search results, nothing saved, no postings, loading, API unavailable, connection lost, first visit, empty category ("No postings in this category yet", with "Show all postings").
