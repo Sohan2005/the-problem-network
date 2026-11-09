@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef } from "react";
+import { ChevronLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { categoryHref, categoryItems } from "@/lib/categories";
 
@@ -67,6 +68,34 @@ export default function CategoryNav({ active, counts, layout }: CategoryNavProps
         <ul className="flex flex-col gap-1">{links}</ul>
       </div>
     </nav>
+  );
+}
+
+interface CategorySidebarToggleProps {
+  collapsed: boolean;
+  controls: string;
+  onToggle: () => void;
+}
+
+/** Shows or hides the desktop sidebar; not rendered below 1024px, where the chip row is used. */
+export function CategorySidebarToggle({ collapsed, controls, onToggle }: CategorySidebarToggleProps) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-label={collapsed ? "Show categories" : "Hide categories"}
+      aria-expanded={!collapsed}
+      aria-controls={controls}
+      className={cn(
+        "hidden lg:inline-flex items-center justify-center w-12 h-12 shrink-0 rounded-md border border-border bg-bg text-text hover:bg-bg-alt transition-colors duration-hover",
+        focusRing,
+      )}
+    >
+      <ChevronLeft
+        aria-hidden="true"
+        className={cn("w-5 h-5 transition-transform duration-dropdown motion-reduce:transition-none", collapsed && "rotate-180")}
+      />
+    </button>
   );
 }
 

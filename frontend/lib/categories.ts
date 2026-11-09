@@ -29,6 +29,11 @@ export function parseCategory(value: string | null | undefined): string | null {
   return CATEGORIES.some((category) => category.slug === slug) ? slug : null;
 }
 
+/** The display name of a category slug, or null for All (null) and unknown slugs. */
+export function categoryLabel(slug: string | null): string | null {
+  return CATEGORIES.find((category) => category.slug === slug)?.label ?? null;
+}
+
 /** Home page link for a category (null = All), keeping every other parameter of the current query string. */
 export function categoryHref(slug: string | null, currentQuery = ""): string {
   const params = new URLSearchParams(currentQuery);

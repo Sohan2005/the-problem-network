@@ -1,13 +1,15 @@
 "use client";
 
-import { Suspense, useState, useEffect } from "react";
+import { Suspense, useState, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { fetchBriefPage, nextOffset, pageItems } from "@/lib/api";
-import { CATEGORY_PARAM, EMPTY_CATEGORY_MESSAGE, categoryHref, parseCategory } from "@/lib/categories";
+import { CATEGORY_PARAM, EMPTY_CATEGORY_MESSAGE, categoryHref, categoryLabel, parseCategory } from "@/lib/categories";
+import { SIDEBAR_ID, SIDEBAR_TRANSITION_MS, readSidebarCollapsed, writeSidebarCollapsed } from "@/lib/sidebar";
 import { useFilterStore } from "@/lib/store";
+import { cn } from "@/lib/utils";
 import BriefCard from "@/components/BriefCard";
-import CategoryNav, { CategoryNavSkeleton } from "@/components/CategoryNav";
+import CategoryNav, { CategoryNavSkeleton, CategorySidebarToggle } from "@/components/CategoryNav";
 import FilterBar from "@/components/FilterBar";
 import LoadMore from "@/components/LoadMore";
 import Navbar from "@/components/Navbar";
@@ -28,6 +30,7 @@ function HomeContent() {
   const router = useRouter();
   const category = parseCategory(useSearchParams().get(CATEGORY_PARAM));
   const [categoryCounts, setCategoryCounts] = useState<Record<string, number> | null>(null);
+  const sidebar = useSidebarCollapse();
 
   // Debounced search
   useEffect(() => {
@@ -74,30 +77,52 @@ function HomeContent() {
   useEffect(() => {
     if (latestCounts) setCategoryCounts(latestCounts);
   }, [latestCounts]);
-  // With the sidebar taking 256px, three card columns only fit from the xl breakpoint.
-  const gridColumns = categoryCounts || isLoading ? "xl:grid-cols-3" : "lg:grid-cols-3";
+  const hasSidebar = !!categoryCounts || isLoading;
+  const selectedCategoryName = categoryLabel(category);
+  // With the sidebar taking 256px, three card columns only fit from the xl breakpoint; hidden, one more fits.
+  const gridColumns = !hasSidebar ? "lg:grid-cols-3" : sidebar.wide ? "lg:grid-cols-3 xl:grid-cols-4" : "xl:grid-cols-3";
 
   return (
     <div className="min-h-screen bg-bg">
       <Navbar />
       <main className="max-w-7xl mx-auto px-4 py-6">
-        <div className="lg:flex lg:gap-6">
-          {/* Category sidebar (desktop) */}
-          {categoryCounts ? (
-            <CategoryNav layout="sidebar" active={category} counts={categoryCounts} />
-          ) : (
-            isLoading && <CategoryNavSkeleton />
+        <div className="lg:flex">
+          {/* Category sidebar (desktop); overflow-clip rather than hidden keeps the sticky list working */}
+          {hasSidebar && (
+            <div
+              id={SIDEBAR_ID}
+              ref={sidebar.ref}
+              className={cn(
+                "hidden lg:flex shrink-0 overflow-clip",
+                sidebar.animate && "transition-[width,margin-right,visibility] duration-dropdown motion-reduce:transition-none",
+                sidebar.collapsed ? "w-0 mr-0 invisible" : "w-64 mr-6",
+              )}
+            >
+              {categoryCounts ? (
+                <CategoryNav layout="sidebar" active={category} counts={categoryCounts} />
+              ) : (
+                <CategoryNavSkeleton />
+              )}
+            </div>
           )}
 
           <div className="flex-1 min-w-0">
-            {/* Search */}
-            <div className="mb-4">
+            {/* Sidebar toggle (desktop) and search */}
+            <div className="mb-4 flex items-center gap-2">
+              {hasSidebar && (
+                <CategorySidebarToggle collapsed={sidebar.collapsed} controls={SIDEBAR_ID} onToggle={sidebar.toggle} />
+              )}
+              {hasSidebar && sidebar.collapsed && selectedCategoryName && (
+                <span className="hidden lg:inline shrink-0 whitespace-nowrap text-small text-text-muted">
+                  Category: {selectedCategoryName}
+                </span>
+              )}
               <input
                 type="text"
                 placeholder="Search postings..."
                 value={localSearch}
                 onChange={(e) => setLocalSearch(e.target.value)}
-                className="w-full max-w-md px-4 py-2 border border-border rounded-md bg-bg text-text min-h-[48px]"
+                className="w-full max-w-md min-w-0 px-4 py-2 border border-border rounded-md bg-bg text-text min-h-[48px]"
               />
             </div>
 
@@ -187,4 +212,38 @@ function HomeContent() {
       </footer>
     </div>
   );
+}
+
+/**
+ * The desktop sidebar's hidden state, kept in localStorage and read after mount so the server HTML (sidebar shown)
+ * matches the first client render. wide switches the grid to the extra column only once the sidebar has finished
+ * closing, so the cards are never squeezed mid-animation. The hidden sidebar is made inert, not only zero-width.
+ */
+function useSidebarCollapse() {
+  const [state, setState] = useState({ collapsed: false, wide: false, animate: false });
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const collapsed = readSidebarCollapsed(() => window.localStorage);
+    setState({ collapsed, wide: collapsed, animate: false });
+  }, []);
+
+  useEffect(() => {
+    if (!state.collapsed || state.wide) return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const timer = setTimeout(() => setState((s) => ({ ...s, wide: true })), reduced ? 0 : SIDEBAR_TRANSITION_MS);
+    return () => clearTimeout(timer);
+  }, [state.collapsed, state.wide]);
+
+  useEffect(() => {
+    if (ref.current) ref.current.inert = state.collapsed;
+  });
+
+  const toggle = () => {
+    const collapsed = !state.collapsed;
+    writeSidebarCollapsed(() => window.localStorage, collapsed);
+    setState({ collapsed, wide: false, animate: true });
+  };
+
+  return { ...state, ref, toggle };
 }

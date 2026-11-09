@@ -47,6 +47,7 @@ export default function PrivacyPage() {
             </p>
             <ul className="list-disc pl-6 space-y-2 text-body text-text leading-body mb-3">
               <li><code>theme</code>: your light or dark mode choice.</li>
+              <li><code>tpn-sidebar-collapsed</code>: whether you hid the category sidebar.</li>
               <li><code>favoriteBriefs</code>: the ids of the postings you saved. When you open Saved Postings, those ids are sent to the API to load the postings; they are not stored on the server.</li>
               <li><code>giscus-session</code>: only if you sign in to comment (see below).</li>
             </ul>

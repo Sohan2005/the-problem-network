@@ -59,8 +59,12 @@ The design rules for The Problem Network. Every color, space, size and duration 
 ## Categories
 
 - Every posting has one category. "All" comes first and is the default; it shows the unfiltered list.
-- Desktop (from 1024px): a 256px sidebar left of the list, one 48px-high link per category with its count.
-- Tablet and mobile: one horizontally scrolling row of chips between the filters and the sort.
+- Desktop (from 1024px): a 256px sidebar left of the list, 64px from it, one 48px-high link per category with its count.
+- Collapsible on desktop: a 48 by 48px toggle button sits at the left edge of the content, in the search row, in both states. It reads "Hide categories" or "Show categories" (`aria-label`), sets `aria-expanded` and `aria-controls`, and shows a chevron that points left (hide) or right (show).
+- Hiding animates the sidebar width and gap to 0 in 200ms (no animation with reduced motion); the hidden sidebar is `inert` and invisible, so it cannot be focused or announced. The grid then uses the freed space: 3 columns from 1024px and 4 from 1280px, instead of 2 and 3 beside the sidebar. When hiding, the column count changes after the animation.
+- While hidden, the selected category is shown next to the toggle as "Category: Developer Tools" (small, muted text). Nothing is shown for "All".
+- The choice is kept in localStorage under `tpn-sidebar-collapsed` ("true" or "false"; anything else counts as shown). The first visit starts shown, and the stored value is read after the page mounts.
+- Tablet and mobile: one horizontally scrolling row of chips between the filters and the sort. No toggle.
 - The selected category uses the accent background with accent text and `aria-current="page"`. It is kept in the URL (`?category=`), so links and the back button work.
 - Counts follow the search, tech stack, difficulty and importance filters. "Other" is listed only when it has postings.
 
